@@ -1,47 +1,24 @@
-//! Fly Ruler Protocol Kernel
+//! Fly Ruler Protocol Kernel core library.
 //!
-//! A high-performance binary serialization protocol library for aerospace flight simulation.
-//! Located between Python SDK (sender) and Godot Server (receiver), enabling 1000Hz+
-//! state updates with microsecond-level serialization latency.
-//!
-//! ## Protocol Format
-//! - Protobuf datagram payload over UDP
-//! - Transport: Tokio UDP with app-layer session state (handshake/heartbeat)
-//! - Serialization: `prost` / protobuf
-//! - Protocol version constant: [`PROTOCOL_VERSION`]
-//!
-//! ## Usage
-//! ```rust
-//! use fly_ruler_proto_core::{pb, Codec};
-//! use tokio::net::UdpSocket;
-//!
-//! let _msg = pb::Message {
-//!     envelope: Some(pb::message::Envelope::Request(pb::Request {
-//!         id: None,
-//!         timestamp: 0.0,
-//!         command: Some(pb::RequestCommand {
-//!             kind: Some(pb::request_command::Kind::Heartbeat(pb::Heartbeat {
-//!                 seq_num: 1,
-//!                 client_uuid: None,
-//!             })),
-//!         }),
-//!     })),
-//! };
-//! ```
-//!
-//! ## Module Structure
-//! - [`pb`] - Generated protobuf message types
-//! - [`codec`] - Legacy length-delimited codec utilities
-//! - [`transport`] - UDP Client/Server abstractions
-//! - [`store`] - In-memory time-series store and explicit persistence
-//! - [`kernel`] - Runtime orchestration helpers
+//! Provides the UDP/protobuf wire protocol, transport runtime, time-series
+//! store, and kernel orchestration used by the Python and Godot bindings.
 
+#![warn(missing_docs)]
+#![deny(unsafe_code)]
+
+/// Runtime configuration types.
 pub mod config;
+/// Kernel orchestration and server lifecycle.
 pub mod kernel;
+/// Tracing subscriber initialization.
 pub mod logging;
+/// Generated protobuf types.
 pub mod pb;
+/// Time-series storage and persistence.
 pub mod store;
+/// UDP transport runtime.
 pub mod transport;
+pub(crate) mod utils;
 
 /// Protocol semantic version shared across core and language bindings.
 pub const PROTOCOL_VERSION: &str = "1.0.0";
@@ -51,7 +28,7 @@ pub use config::{LoggingConfig, RuntimeConfig, StoreConfig, TransportConfig};
 pub use kernel::{KernelRuntime, RuntimeError};
 pub use logging::init_logging;
 pub use store::{
-    AircraftId, AircraftTimeSeries, Event, StoreError, TimeSeriesStore, TimestampedEvent,
-    TimestampedState,
+    AircraftConfig, AircraftId, AircraftTimeSeries, Event, StoreError, TimeSeriesStore,
+    TimestampedEvent, TimestampedState,
 };
 pub use transport::{AircraftClient, Client, Server, ServerRuntime, Session, TransportError};

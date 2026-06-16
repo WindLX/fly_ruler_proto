@@ -2,14 +2,14 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use fly_ruler_proto_core::pb;
-use fly_ruler_proto_core::{init_logging, Event, KernelRuntime, TimeSeriesStore};
+use fly_ruler_proto_core::{init_logging, Event, KernelRuntime, LoggingConfig, TimeSeriesStore};
 use godot::prelude::*;
 use tokio::runtime::Runtime;
 
 static GODOT_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 fn get_runtime() -> &'static Runtime {
-    init_logging();
+    init_logging(&LoggingConfig::default());
     GODOT_RUNTIME.get_or_init(|| Runtime::new().expect("failed to create tokio runtime"))
 }
 

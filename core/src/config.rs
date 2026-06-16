@@ -6,7 +6,9 @@
 /// Transport/session-related runtime options.
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
+    /// Interval between client heartbeats, in seconds.
     pub heartbeat_interval_secs: u64,
+    /// Server-side timeout after which a session is considered expired, in seconds.
     pub heartbeat_timeout_secs: u64,
 }
 
@@ -20,6 +22,9 @@ impl Default for TransportConfig {
 }
 
 /// Store-related runtime options.
+///
+/// Currently intentionally empty; future knobs (e.g. retention, queue sizing)
+/// will be added here without breaking the API.
 #[derive(Debug, Clone, Default)]
 pub struct StoreConfig;
 
@@ -44,7 +49,10 @@ impl Default for LoggingConfig {
 /// Top-level runtime configuration for kernel orchestration.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeConfig {
+    /// Transport and session configuration.
     pub transport: TransportConfig,
+    /// Store ingestion configuration.
     pub store: StoreConfig,
+    /// Logging configuration.
     pub logging: LoggingConfig,
 }

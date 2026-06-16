@@ -7,36 +7,34 @@ use std::sync::OnceLock;
 
 use fly_ruler_proto_core::pb;
 use fly_ruler_proto_core::transport::{AircraftClient, Server as RustServer};
+use fly_ruler_proto_core::{init_logging, LoggingConfig, TransportConfig};
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 use tracing::{debug, info};
-use tracing_subscriber::EnvFilter;
 
 use crate::protocol::PyAircraftState;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-static LOGGING_INIT: OnceLock<()> = OnceLock::new();
 
-const DEFAULT_LOG_FILTER: &str =
-    "warn,fly_ruler_proto_python.client=info,fly_ruler_proto_python.server=info,fly_ruler_proto_core.runtime=warn,fly_ruler_proto_core.store=warn,fly_ruler_proto_core.transport=warn";
-
-fn init_logging() {
-    let _ = LOGGING_INIT.get_or_init(|| {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(true)
-            .with_thread_names(true)
-            .try_init();
-    });
+fn get_runtime() -> PyResult<&'static Runtime> {
+    init_logging(&LoggingConfig::default());
+    match RUNTIME.get() {
+        Some(rt) => Ok(rt),
+        None => {
+            let rt = Runtime::new()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            match RUNTIME.set(rt) {
+                Ok(_) => Ok(RUNTIME.get().expect("runtime just set")),
+                Err(_rt) => Ok(RUNTIME.get().expect("runtime just observed set")),
+            }
+        }
+    }
 }
 
-fn get_runtime() -> &'static Runtime {
-    init_logging();
-    RUNTIME.get_or_init(|| Runtime::new().expect("failed to create tokio runtime"))
-}
-
+/// Aircraft-bound client exposed to Python.
+///
+/// One instance corresponds to one aircraft lifecycle: connect, spawn,
+/// update state, create events, despawn, and close.
 #[pyclass(name = "PyClient")]
 pub struct PyClient {
     addr: String,
@@ -63,7 +61,7 @@ impl PyClient {
         toml_config: String,
         heartbeat_interval_secs: f64,
     ) -> PyResult<Self> {
-        let runtime = get_runtime();
+        let runtime = get_runtime()?;
         let initial_state_pb: pb::AircraftState = initial_state
             .unwrap_or_else(PyAircraftState::default_for_rust)
             .into();
@@ -72,6 +70,7 @@ impl PyClient {
             .block_on(async {
                 AircraftClient::connect(
                     addr,
+                    &LoggingConfig::default(),
                     aircraft_name,
                     initial_state_pb,
                     toml_config,
@@ -101,14 +100,17 @@ impl PyClient {
         })
     }
 
+    /// Return the client UUID.
     fn client_uuid(&self) -> String {
         self.client_uuid.to_string()
     }
 
+    /// Return the aircraft UUID.
     fn aircraft_uuid(&self) -> String {
         self.aircraft_uuid.to_string()
     }
 
+    /// Send a state update for the aircraft.
     #[pyo3(signature = (state, timestamp=None))]
     fn update_state(&mut self, state: PyAircraftState, timestamp: Option<f64>) -> PyResult<()> {
         self.ensure_open()?;
@@ -121,6 +123,7 @@ impl PyClient {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))
     }
 
+    /// Send a custom event for the aircraft.
     #[pyo3(signature = (event_name, timestamp=None))]
     fn create_event(&mut self, event_name: &str, timestamp: Option<f64>) -> PyResult<()> {
         self.ensure_open()?;
@@ -133,6 +136,7 @@ impl PyClient {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))
     }
 
+    /// Send a despawn command for the aircraft.
     #[pyo3(signature = (reason=None, timestamp=None))]
     fn despawn(&mut self, reason: Option<String>, timestamp: Option<f64>) -> PyResult<()> {
         self.ensure_open()?;
@@ -145,6 +149,7 @@ impl PyClient {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))
     }
 
+    /// Close the client, sending a best-effort despawn if needed.
     fn close(&mut self) -> PyResult<()> {
         if self.closed {
             return Ok(());
@@ -158,7 +163,7 @@ impl PyClient {
             "closing aircraft-bound client"
         );
 
-        let runtime = get_runtime();
+        let runtime = get_runtime()?;
 
         if let Some(inner) = self.inner.as_mut() {
             runtime
@@ -194,6 +199,10 @@ impl PyClient {
     }
 }
 
+/// Low-level UDP server exposed to Python.
+///
+/// Intended primarily for testing; production servers should use
+/// `KernelRuntime` or the Godot binding.
 #[pyclass(name = "PyServer")]
 pub struct PyServer {
     inner: Option<RustServer>,
@@ -204,10 +213,10 @@ pub struct PyServer {
 impl PyServer {
     #[new]
     fn new(addr: &str) -> PyResult<Self> {
-        let runtime = get_runtime();
+        let runtime = get_runtime()?;
         info!(target: "fly_ruler_proto_python.server", addr = addr, "binding UDP server");
         let server = runtime
-            .block_on(async { RustServer::bind(addr).await })
+            .block_on(async { RustServer::bind(addr, TransportConfig::default()).await })
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))?;
 
         Ok(Self {
@@ -216,6 +225,7 @@ impl PyServer {
         })
     }
 
+    /// Return the local socket address as a string.
     fn local_addr(&self) -> PyResult<String> {
         let addr = self
             .inner
@@ -231,12 +241,23 @@ impl PyServer {
         Ok(addr)
     }
 
-    fn close(&mut self) {
+    /// Close the server socket.
+    fn close(&mut self) -> PyResult<()> {
         info!(target: "fly_ruler_proto_python.server", "closing server handle");
-        self.inner = None;
+        if let Some(server) = self.inner.take() {
+            let runtime = get_runtime()?;
+            runtime
+                .block_on(async { server.close().await })
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))?;
+        }
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
         format!("PyServer(addr='{}')", self.addr)
+    }
+
+    fn __del__(&mut self) {
+        let _ = self.close();
     }
 }

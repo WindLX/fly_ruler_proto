@@ -3,11 +3,15 @@
 use fly_ruler_proto_core::pb;
 use pyo3::prelude::*;
 
+/// 3D vector with `x`, `y`, `z` components.
 #[pyclass(from_py_object, name = "Vector3", get_all, set_all)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PyVector3 {
+    /// X component.
     pub x: f64,
+    /// Y component.
     pub y: f64,
+    /// Z component.
     pub z: f64,
 }
 
@@ -28,6 +32,7 @@ impl PyVector3 {
         Self { x, y, z }
     }
 
+    /// Return the zero vector.
     #[staticmethod]
     fn zero() -> Self {
         Self {
@@ -42,12 +47,17 @@ impl PyVector3 {
     }
 }
 
+/// Quaternion with `w`, `x`, `y`, `z` components.
 #[pyclass(from_py_object, name = "Quaternion", get_all, set_all)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PyQuaternion {
+    /// Real component.
     pub w: f64,
+    /// Imaginary i component.
     pub x: f64,
+    /// Imaginary j component.
     pub y: f64,
+    /// Imaginary k component.
     pub z: f64,
 }
 
@@ -69,6 +79,7 @@ impl PyQuaternion {
         Self { w, x, y, z }
     }
 
+    /// Return the identity quaternion.
     #[staticmethod]
     fn identity() -> Self {
         Self {
@@ -87,17 +98,27 @@ impl PyQuaternion {
     }
 }
 
+/// Derived aerodynamic/navigation state.
 #[pyclass(from_py_object, name = "DerivedState", get_all, set_all)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PyDerivedState {
+    /// Latitude in degrees.
     pub lat: f64,
+    /// Longitude in degrees.
     pub lon: f64,
+    /// Altitude in meters.
     pub altitude: f64,
+    /// Angle of attack in radians.
     pub alpha: f64,
+    /// Sideslip angle in radians.
     pub beta: f64,
+    /// True airspeed.
     pub tas: f64,
+    /// Equivalent airspeed.
     pub eas: f64,
+    /// Flight path angle in radians.
     pub gamma: f64,
+    /// Track angle in radians.
     pub chi: f64,
 }
 
@@ -121,6 +142,7 @@ impl From<PyDerivedState> for pb::DerivedState {
 impl PyDerivedState {
     #[new]
     #[pyo3(signature = (lat, lon, altitude, alpha=0.0, beta=0.0, tas=0.0, eas=0.0, gamma=0.0, chi=0.0))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         lat: f64,
         lon: f64,
@@ -153,13 +175,19 @@ impl PyDerivedState {
     }
 }
 
+/// Full aircraft state including pose, velocity, attitude, and derived state.
 #[pyclass(from_py_object, name = "AircraftState", get_all, set_all)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PyAircraftState {
+    /// Position vector.
     pub position: PyVector3,
+    /// Velocity vector.
     pub velocity: PyVector3,
+    /// Attitude quaternion.
     pub attitude: PyQuaternion,
+    /// Angular velocity vector.
     pub angular_velocity: PyVector3,
+    /// Optional derived aerodynamic/navigation state.
     pub derived: Option<PyDerivedState>,
 }
 
@@ -177,6 +205,7 @@ impl From<PyAircraftState> for pb::AircraftState {
 }
 
 impl PyAircraftState {
+    /// Return a default hover state for Rust-side fallback.
     pub fn default_for_rust() -> Self {
         Self {
             position: PyVector3::zero(),
@@ -208,6 +237,7 @@ impl PyAircraftState {
         }
     }
 
+    /// Return a default hover state.
     #[staticmethod]
     fn hover() -> Self {
         Self::new(None, None, None, None, None)

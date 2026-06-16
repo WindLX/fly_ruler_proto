@@ -4,11 +4,11 @@
 
 This document is the architecture baseline for `core` and its direct runtime users (`bindings/python`, `bindings/godot`).
 
-Current priorities:
+v1 priorities:
 
 - Keep UDP + protobuf runtime path stable and observable.
 - Make kernel/server configuration explicit and complete.
-- Reduce module coupling and repetitive logic.
+- Keep runtime, transport, and store responsibilities separated.
 - Keep API compatibility for current bindings while refactoring internals incrementally.
 
 ## 2. Current Architecture (As-Is)
@@ -19,16 +19,20 @@ Current priorities:
 - Runtime transport: UDP (`tokio::net::UdpSocket`).
 - Session model: app-layer handshake/heartbeat with `client_uuid`.
 - Persistence: explicit `save_to_disk` / `load_from_disk` using `meta.json` + parquet.
+- Delivery: high-frequency state updates are best effort; no state ACK/retry in v1.
 
 ### 2.2 Core Modules
 
 - `pb.rs`: generated protobuf module re-export.
-- `codec.rs`: length-delimited frame codec utility (legacy/TCP-oriented helper).
 - `transport.rs`: UDP client/server + session bookkeeping.
 - `store.rs`: in-memory time-series storage and persistence.
 - `kernel.rs`: orchestration runtime (recv loop, ACK, ingestion, lifecycle).
 - `logging.rs`: tracing subscriber initialization.
-- `config.rs`: runtime configuration (newly introduced).
+- `config.rs`: runtime configuration (transport/store/logging).
+- `utils.rs`: internal helpers (`uuid_to_hex`, `now_secs`). **Not public API.**
+
+> Note: `codec.rs` (length-delimited frame codec for an earlier TCP experiment) has
+> been removed. The v1 transport is UDP-only.
 
 ### 2.3 Key Issues (Before Refactor)
 
@@ -37,7 +41,7 @@ Current priorities:
 - Configuration knobs were scattered or implicit.
 - Historical document versions described TCP mainline; implementation is now UDP mainline.
 
-## 3. Target Architecture (To-Be)
+## 3. Target Architecture (v1)
 
 ```text
 bindings/python | bindings/godot
@@ -57,9 +61,10 @@ bindings/python | bindings/godot
 Design rules:
 
 - `KernelRuntime` is the single orchestration entry.
-- Transport focuses on message I/O and connection/session primitives.
-- ACK/session policy is fixed for correctness: handshake and heartbeat always ACK.
-- Store remains explicit and deterministic (no hidden background autosave).
+- Transport focuses on message I/O and session primitives.
+- ACK/session policy is fixed: handshake and heartbeat ACK; state updates do not.
+- Store remains explicit and deterministic: no hidden background autosave and no replay task.
+- TOML configs, custom fields, and custom events are persisted as data, without schema validation.
 
 ## 4. Configuration Model
 
@@ -94,9 +99,9 @@ Planned improvements:
 
 ## 6. Incremental Refactor Plan
 
-### Phase 0: Baseline and Docs (in progress)
+### Phase 0: Baseline and Docs
 
-- Align architecture docs with UDP reality.
+- Align architecture docs with UDP/protobuf reality.
 - Keep behavior stable while introducing config skeleton.
 
 ### Phase 1: Runtime Config Completion
@@ -124,6 +129,9 @@ Planned improvements:
 - No protocol schema breaking changes.
 - No immediate switch to a different primary transport.
 - No hidden autosave behavior in core runtime.
+- No kernel-level replay, interpolation, playback speed, render timing, or UI/model binding logic.
+- No schema validation for `toml_config` or `custom_fields` in v1.
+- No standalone daemon process in v1.
 
 ## 8. Compatibility Notes
 

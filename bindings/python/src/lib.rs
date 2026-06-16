@@ -21,6 +21,7 @@ mod serialize_inner {
     use fly_ruler_proto_core::PROTOCOL_VERSION;
     use pyo3::prelude::*;
 
+    /// Return the protocol version as a string.
     #[pyfunction]
     pub fn get_protocol_version() -> String {
         PROTOCOL_VERSION.to_string()
@@ -30,7 +31,7 @@ mod serialize_inner {
 pub use client::*;
 pub use protocol::*;
 
-/// Python module definition
+/// Python module definition.
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Core state types
@@ -43,7 +44,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClient>()?;
     m.add_class::<PyServer>()?;
 
-    // Serialization functions (now on Command class)
     // Protocol version function
     m.add_function(wrap_pyfunction!(serialize_inner::get_protocol_version, m)?)?;
 

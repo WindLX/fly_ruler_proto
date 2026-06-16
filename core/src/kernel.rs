@@ -8,22 +8,29 @@ use std::path::Path;
 use std::sync::Arc;
 
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::RuntimeConfig;
 use crate::logging::init_logging;
 use crate::store::{StoreError, TimeSeriesStore};
-use crate::transport::{Session, ServerRuntime, TransportError};
+use crate::transport::{ServerRuntime, Session, TransportError};
 
+/// Errors that can occur when using the kernel runtime.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    /// An error originating from the transport layer.
     #[error("transport error: {0}")]
     Transport(#[from] TransportError),
 
+    /// An error originating from the store layer.
     #[error("store error: {0}")]
     Store(#[from] StoreError),
 }
 
+/// Orchestrates a UDP server runtime and a shared time-series store.
+///
+/// This is the primary embedded entry point for Godot and other consumers
+/// that need to receive, persist, and query protocol messages.
 pub struct KernelRuntime {
     store: Arc<TimeSeriesStore>,
     config: RuntimeConfig,
@@ -31,10 +38,12 @@ pub struct KernelRuntime {
 }
 
 impl KernelRuntime {
+    /// Create a new kernel runtime with default configuration.
     pub fn new(store: Arc<TimeSeriesStore>) -> Self {
         Self::with_config(store, RuntimeConfig::default())
     }
 
+    /// Create a new kernel runtime with the provided configuration.
     pub fn with_config(store: Arc<TimeSeriesStore>, config: RuntimeConfig) -> Self {
         init_logging(&config.logging);
         info!(target: "fly_ruler_proto_core.runtime", "kernel runtime initialized");
@@ -45,14 +54,19 @@ impl KernelRuntime {
         }
     }
 
+    /// Return a reference to the runtime configuration.
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
     }
 
+    /// Return a clone of the shared store handle.
     pub fn store(&self) -> Arc<TimeSeriesStore> {
         Arc::clone(&self.store)
     }
 
+    /// Start the UDP server runtime on the given address.
+    ///
+    /// If a server is already running, it is stopped and replaced.
     pub async fn start_server(&mut self, addr: &str) -> Result<(), RuntimeError> {
         if self.udp_runtime.is_some() {
             self.stop_server().await;
@@ -71,14 +85,18 @@ impl KernelRuntime {
         Ok(())
     }
 
+    /// Stop the UDP server runtime, if one is running.
     pub async fn stop_server(&mut self) {
         info!(target: "fly_ruler_proto_core.runtime", "stopping UDP server runtime");
 
         if let Some(mut runtime) = self.udp_runtime.take() {
-            let _ = runtime.stop().await;
+            if let Err(e) = runtime.stop().await {
+                warn!(target: "fly_ruler_proto_core.runtime", error = %e, "error stopping UDP server runtime");
+            }
         }
     }
 
+    /// Return the list of currently active sessions.
     pub async fn active_sessions(&self) -> Vec<Session> {
         match &self.udp_runtime {
             Some(runtime) => runtime.active_sessions().await,
@@ -86,6 +104,9 @@ impl KernelRuntime {
         }
     }
 
+    /// Return the local socket address of the running UDP server.
+    ///
+    /// Returns an error if no server is currently running.
     pub fn udp_local_addr(&self) -> Result<SocketAddr, RuntimeError> {
         let Some(runtime) = &self.udp_runtime else {
             return Err(RuntimeError::Transport(TransportError::InvalidMessage(
@@ -95,18 +116,21 @@ impl KernelRuntime {
         Ok(runtime.local_addr()?)
     }
 
+    /// Persist the current in-memory session to disk.
     pub fn save_session(&self, path: &Path) -> Result<(), RuntimeError> {
         info!(target: "fly_ruler_proto_core.runtime", path = %path.display(), "saving runtime session");
         self.store.save_to_disk(path)?;
         Ok(())
     }
 
+    /// Load a session snapshot from disk, replacing current in-memory contents.
     pub fn load_session(&self, path: &Path) -> Result<(), RuntimeError> {
         info!(target: "fly_ruler_proto_core.runtime", path = %path.display(), "loading runtime session");
         self.store.load_from_disk(path)?;
         Ok(())
     }
 
+    /// Clear all in-memory session data.
     pub fn clear_session(&self) {
         self.store.clear();
     }

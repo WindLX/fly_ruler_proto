@@ -8,10 +8,12 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::logging::init_logging;
+use crate::pb;
+use crate::utils::now_secs;
+use crate::LoggingConfig;
 use crate::PROTOCOL_VERSION;
-use crate::{pb, LoggingConfig};
 
-use super::{now_secs, TransportError};
+use super::TransportError;
 
 /// Low-level UDP client for protobuf transport.
 pub struct Client {
@@ -172,24 +174,38 @@ impl Client {
     }
 }
 
+/// Outbound message or control signal for the sender task.
 enum Outbound {
-    Send(pb::Message),
+    /// Send a protobuf message to the remote endpoint.
+    Send(Box<pb::Message>),
+    /// Stop the sender task.
     Shutdown,
 }
 
+/// Operations queued by user-facing methods and processed by the operation task.
 enum Operation {
+    /// Update the aircraft state.
     UpdateState {
-        state: pb::AircraftState,
+        /// New aircraft state.
+        state: Box<pb::AircraftState>,
+        /// Optional explicit timestamp; `None` uses the current time.
         timestamp: Option<f64>,
     },
+    /// Create a custom event.
     CreateEvent {
+        /// Event name.
         event_name: String,
+        /// Optional explicit timestamp.
         timestamp: Option<f64>,
     },
+    /// Despawn the aircraft.
     Despawn {
+        /// Optional reason string.
         reason: Option<String>,
+        /// Optional explicit timestamp.
         timestamp: Option<f64>,
     },
+    /// Stop the operation task.
     Stop,
 }
 
@@ -219,6 +235,9 @@ pub struct AircraftClient {
 }
 
 impl AircraftClient {
+    /// Connect to a remote server and start the aircraft lifecycle.
+    ///
+    /// This sends a `Handshake` and `Spawn` message automatically.
     pub async fn connect(
         addr: &str,
         logging_config: &LoggingConfig,
@@ -252,7 +271,7 @@ impl AircraftClient {
             while let Some(outbound) = out_rx.recv().await {
                 match outbound {
                     Outbound::Send(msg) => {
-                        if let Err(e) = client.send(msg).await {
+                        if let Err(e) = client.send(*msg).await {
                             error!(target: "fly_ruler_proto_core.transport", error = %e, "client send failed");
                             break;
                         }
@@ -269,47 +288,67 @@ impl AircraftClient {
             info!(target: "fly_ruler_proto_core.transport", "client sender task exited");
         });
 
-        let _ = out_tx.send(Outbound::Send(Client::build_handshake_message(uuid_to_pb(
-            client_uuid_for_handshake,
-        ))));
+        send_outbound(
+            &out_tx,
+            Outbound::Send(Box::new(Client::build_handshake_message(uuid_to_pb(
+                client_uuid_for_handshake,
+            )))),
+            "handshake",
+        );
 
         let op_out_tx = out_tx.clone();
         let operation_handle = tokio::spawn(async move {
-            let _ = op_out_tx.send(Outbound::Send(Client::build_spawn_message(
-                uuid_to_pb(aircraft_uuid_for_ops),
-                aircraft_name,
-                toml_config,
-                initial_state,
-            )));
+            send_outbound(
+                &op_out_tx,
+                Outbound::Send(Box::new(Client::build_spawn_message(
+                    uuid_to_pb(aircraft_uuid_for_ops),
+                    aircraft_name,
+                    toml_config,
+                    initial_state,
+                ))),
+                "spawn",
+            );
 
             while let Some(op) = op_rx.recv().await {
                 match op {
                     Operation::UpdateState { state, timestamp } => {
-                        let _ = op_out_tx.send(Outbound::Send(Client::build_state_update_message(
-                            uuid_to_pb(aircraft_uuid_for_ops),
-                            state,
-                            timestamp,
-                        )));
+                        send_outbound(
+                            &op_out_tx,
+                            Outbound::Send(Box::new(Client::build_state_update_message(
+                                uuid_to_pb(aircraft_uuid_for_ops),
+                                *state,
+                                timestamp,
+                            ))),
+                            "state_update",
+                        );
                     }
                     Operation::CreateEvent {
                         event_name,
                         timestamp,
                     } => {
-                        let _ = op_out_tx.send(Outbound::Send(Client::build_custom_event_message(
-                            uuid_to_pb(aircraft_uuid_for_ops),
-                            event_name,
-                            timestamp,
-                        )));
+                        send_outbound(
+                            &op_out_tx,
+                            Outbound::Send(Box::new(Client::build_custom_event_message(
+                                uuid_to_pb(aircraft_uuid_for_ops),
+                                event_name,
+                                timestamp,
+                            ))),
+                            "custom_event",
+                        );
                     }
                     Operation::Despawn { reason, timestamp } => {
-                        let _ = op_out_tx.send(Outbound::Send(Client::build_despawn_message(
-                            uuid_to_pb(aircraft_uuid_for_ops),
-                            reason,
-                            timestamp,
-                        )));
+                        send_outbound(
+                            &op_out_tx,
+                            Outbound::Send(Box::new(Client::build_despawn_message(
+                                uuid_to_pb(aircraft_uuid_for_ops),
+                                reason,
+                                timestamp,
+                            ))),
+                            "despawn",
+                        );
                     }
                     Operation::Stop => {
-                        let _ = op_out_tx.send(Outbound::Shutdown);
+                        send_outbound(&op_out_tx, Outbound::Shutdown, "shutdown");
                         break;
                     }
                 }
@@ -331,10 +370,14 @@ impl AircraftClient {
                             break;
                         }
                         seq_num = seq_num.saturating_add(1);
-                        let _ = hb_out_tx.send(Outbound::Send(Client::build_heartbeat_message(
-                            seq_num,
-                            uuid_to_pb(client_uuid_for_heartbeat),
-                        )));
+                        send_outbound(
+                            &hb_out_tx,
+                            Outbound::Send(Box::new(Client::build_heartbeat_message(
+                                seq_num,
+                                uuid_to_pb(client_uuid_for_heartbeat),
+                            ))),
+                            "heartbeat",
+                        );
                         debug!(target: "fly_ruler_proto_core.transport", seq_num, "client heartbeat queued");
                     }
                     changed = stop_rx.changed() => {
@@ -361,23 +404,30 @@ impl AircraftClient {
         })
     }
 
+    /// Return the client UUID as a string.
     pub fn client_uuid(&self) -> String {
         self.client_uuid.to_string()
     }
 
+    /// Return the aircraft UUID as a string.
     pub fn aircraft_uuid(&self) -> String {
         self.aircraft_uuid.to_string()
     }
 
+    /// Enqueue a state update for the aircraft.
     pub fn update_state(
         &self,
         state: pb::AircraftState,
         timestamp: Option<f64>,
     ) -> Result<(), TransportError> {
         self.ensure_open()?;
-        self.send_operation(Operation::UpdateState { state, timestamp })
+        self.send_operation(Operation::UpdateState {
+            state: Box::new(state),
+            timestamp,
+        })
     }
 
+    /// Enqueue a custom event for the aircraft.
     pub fn create_event(
         &self,
         event_name: String,
@@ -390,6 +440,7 @@ impl AircraftClient {
         })
     }
 
+    /// Enqueue a despawn command for the aircraft.
     pub fn despawn(
         &mut self,
         reason: Option<String>,
@@ -404,6 +455,7 @@ impl AircraftClient {
         Ok(())
     }
 
+    /// Close the client, sending a despawn if needed and stopping background tasks.
     pub async fn close(&mut self) -> Result<(), TransportError> {
         if self.closed {
             return Ok(());
@@ -418,19 +470,25 @@ impl AircraftClient {
         );
 
         if !self.despawned {
-            let _ = self.send_operation(Operation::Despawn {
+            if let Err(e) = self.send_operation(Operation::Despawn {
                 reason: Some("client_close".to_string()),
                 timestamp: None,
-            });
+            }) {
+                warn!(target: "fly_ruler_proto_core.transport", error = %e, "failed to enqueue close-despawn");
+            }
             self.despawned = true;
         }
 
         if let Some(stop_tx) = self.heartbeat_stop_tx.take() {
-            let _ = stop_tx.send(true);
+            if stop_tx.send(true).is_err() {
+                warn!(target: "fly_ruler_proto_core.transport", "heartbeat stop channel already closed");
+            }
         }
 
         if let Some(op_tx) = self.op_tx.as_ref() {
-            let _ = op_tx.send(Operation::Stop);
+            if op_tx.send(Operation::Stop).is_err() {
+                warn!(target: "fly_ruler_proto_core.transport", "operation stop channel already closed");
+            }
         }
         self.op_tx = None;
 
@@ -465,5 +523,17 @@ impl AircraftClient {
 
         tx.send(op)
             .map_err(|_| TransportError::ClientChannelClosed("failed to enqueue operation"))
+    }
+}
+
+/// Send an outbound message, logging a warning if the channel has closed.
+fn send_outbound(tx: &mpsc::UnboundedSender<Outbound>, outbound: Outbound, kind: &str) {
+    if let Err(e) = tx.send(outbound) {
+        warn!(
+            target: "fly_ruler_proto_core.transport",
+            kind = kind,
+            error = %e,
+            "failed to enqueue outbound message; sender task may have exited"
+        );
     }
 }

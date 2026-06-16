@@ -23,64 +23,91 @@ use tracing::{debug, info, warn};
 
 use crate::config::StoreConfig;
 use crate::pb;
+use crate::utils::uuid_to_hex;
 use crate::PROTOCOL_VERSION;
 
+/// Identifier for an aircraft, represented as a lowercase hex UUID string.
 pub type AircraftId = String;
 
+/// Configuration metadata persisted for a spawned aircraft.
 #[derive(Debug, Clone)]
 pub struct AircraftConfig {
+    /// Aircraft display name.
     pub name: String,
+    /// Raw TOML configuration string.
     pub toml_config: String,
 }
 
+/// Lifecycle events that can be stored for an aircraft.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Spawn(pb::AircraftSpawnInfo),
+    /// Aircraft spawn event, including initial configuration.
+    Spawn(Box<pb::AircraftSpawnInfo>),
+    /// Aircraft despawn event.
     Despawn(pb::DespawnInfo),
+    /// Custom named event.
     Custom(String),
 }
 
+/// A single aircraft state sample with its timestamp.
 #[derive(Debug, Clone)]
 pub struct TimestampedState {
+    /// Timestamp in seconds since the Unix epoch.
     pub timestamp_secs: f64,
+    /// Aircraft state at this timestamp.
     pub state: pb::AircraftState,
 }
 
+/// A single aircraft event with its timestamp.
 #[derive(Debug, Clone)]
 pub struct TimestampedEvent {
+    /// Timestamp in seconds since the Unix epoch.
     pub timestamp_secs: f64,
+    /// Event that occurred at this timestamp.
     pub event: Event,
 }
 
+/// Time-series data for one aircraft.
 #[derive(Debug, Clone, Default)]
 pub struct AircraftTimeSeries {
+    /// State samples, kept sorted by timestamp.
     pub states: Vec<TimestampedState>,
+    /// Lifecycle events, kept sorted by timestamp.
     pub events: Vec<TimestampedEvent>,
+    /// Configuration set by the first `Spawn` event.
     pub config: Option<AircraftConfig>,
 }
 
+/// In-memory time-series store for aircraft states and events.
 #[derive(Debug, Default)]
 pub struct TimeSeriesStore {
     data: DashMap<AircraftId, AircraftTimeSeries>,
 }
 
+/// Errors that can occur when persisting or loading store data.
 #[derive(Debug, Error)]
 pub enum StoreError {
+    /// IO error.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// JSON serialization/deserialization error.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// Parquet read/write error.
     #[error("parquet error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
 
+    /// Arrow conversion error.
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
 
+    /// Protobuf decode error.
     #[error("decode error: {0}")]
     Decode(#[from] prost::DecodeError),
 
+    /// Invalid or inconsistent data.
     #[error("invalid data: {0}")]
     InvalidData(String),
 }
@@ -102,12 +129,16 @@ struct MetaAircraft {
 }
 
 impl TimeSeriesStore {
+    /// Create a new empty store.
     pub fn new() -> Self {
         Self {
             data: DashMap::new(),
         }
     }
 
+    /// Append a state sample for the given aircraft.
+    ///
+    /// States are kept sorted by timestamp.
     pub fn append_state(&self, id: AircraftId, timestamp: f64, state: pb::AircraftState) {
         let mut series = self.data.entry(id).or_default();
         if series
@@ -135,6 +166,10 @@ impl TimeSeriesStore {
         );
     }
 
+    /// Append an event for the given aircraft.
+    ///
+    /// Events are kept sorted by timestamp. A `Spawn` event sets the aircraft
+    /// configuration.
     pub fn append_event(&self, id: AircraftId, timestamp: f64, event: Event) {
         let mut series = self.data.entry(id).or_default();
         if let Event::Spawn(spawn) = &event {
@@ -169,11 +204,19 @@ impl TimeSeriesStore {
         );
     }
 
+    /// Append a protobuf message to the store using default store config.
     pub fn append_message(&self, msg: pb::Message) {
-        self.append_message_with_config(msg, &StoreConfig::default());
+        self.append_message_with_config(msg, &StoreConfig);
     }
 
-    pub fn append_message_with_config(&self, msg: pb::Message, _config: &StoreConfig) {
+    /// Append a protobuf message to the store with the given store config.
+    ///
+    /// `config` is currently a placeholder for future store-level knobs.
+    pub fn append_message_with_config(
+        &self,
+        msg: pb::Message,
+        #[allow(unused_variables)] config: &StoreConfig,
+    ) {
         let Some(pb::message::Envelope::Request(req)) = msg.envelope else {
             debug!(target: "fly_ruler_proto_core.store", "ignored non-request envelope");
             return;
@@ -193,7 +236,7 @@ impl TimeSeriesStore {
         let aircraft_id = event
             .aircraft_id
             .as_ref()
-            .map(uuid_to_id)
+            .map(uuid_to_hex)
             .unwrap_or_else(|| "unknown".to_string());
 
         let Some(info) = event.info.and_then(|i| i.kind) else {
@@ -209,7 +252,7 @@ impl TimeSeriesStore {
                 if let Some(state) = spawn.initial_state.clone() {
                     self.append_state(aircraft_id.clone(), timestamp, state);
                 }
-                self.append_event(aircraft_id, timestamp, Event::Spawn(spawn));
+                self.append_event(aircraft_id, timestamp, Event::Spawn(Box::new(spawn)));
             }
             pb::aircraft_command_info::Kind::Despawn(despawn) => {
                 self.append_event(aircraft_id, timestamp, Event::Despawn(despawn));
@@ -220,12 +263,14 @@ impl TimeSeriesStore {
         }
     }
 
+    /// Return the latest state sample for an aircraft, if any.
     pub fn get_latest(&self, id: &AircraftId) -> Option<TimestampedState> {
         self.data
             .get(id)
             .and_then(|series| series.states.last().cloned())
     }
 
+    /// Return all state samples for an aircraft within the inclusive time range.
     pub fn get_states_range(
         &self,
         id: &AircraftId,
@@ -242,6 +287,7 @@ impl TimeSeriesStore {
         })
     }
 
+    /// Return all events for an aircraft within the inclusive time range.
     pub fn get_events_range(
         &self,
         id: &AircraftId,
@@ -258,16 +304,19 @@ impl TimeSeriesStore {
         })
     }
 
+    /// Return all aircraft IDs currently in the store, sorted.
     pub fn get_aircraft_ids(&self) -> Vec<AircraftId> {
         let mut ids: Vec<_> = self.data.iter().map(|item| item.key().clone()).collect();
         ids.sort();
         ids
     }
 
+    /// Remove all in-memory data.
     pub fn clear(&self) {
         self.data.clear();
     }
 
+    /// Persist the store to disk at the given directory path.
     pub fn save_to_disk(&self, path: &Path) -> Result<(), StoreError> {
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), "saving store to disk");
         fs::create_dir_all(path)?;
@@ -279,6 +328,7 @@ impl TimeSeriesStore {
         Ok(())
     }
 
+    /// Load a store snapshot from disk, replacing current in-memory contents.
     pub fn load_from_disk(&self, path: &Path) -> Result<(), StoreError> {
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), "loading store from disk");
         self.clear();
@@ -513,7 +563,9 @@ fn encode_event(event: &Event) -> (String, Vec<u8>) {
 
 fn decode_event(kind: &str, payload: &[u8]) -> Result<Event, StoreError> {
     match kind {
-        "spawn" => Ok(Event::Spawn(pb::AircraftSpawnInfo::decode(payload)?)),
+        "spawn" => Ok(Event::Spawn(Box::new(pb::AircraftSpawnInfo::decode(
+            payload,
+        )?))),
         "despawn" => Ok(Event::Despawn(pb::DespawnInfo::decode(payload)?)),
         "custom" => Ok(Event::Custom(String::from_utf8(payload.to_vec()).map_err(
             |e| StoreError::InvalidData(format!("invalid utf8 custom event: {e}")),
@@ -524,20 +576,7 @@ fn decode_event(kind: &str, payload: &[u8]) -> Result<Event, StoreError> {
     }
 }
 
-fn uuid_to_id(uuid: &pb::Uuid) -> AircraftId {
-    to_hex(&uuid.value)
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
-
+/// Return the total number of events across all aircraft.
 pub fn event_count_for(store: &TimeSeriesStore) -> usize {
     store
         .data
@@ -546,6 +585,7 @@ pub fn event_count_for(store: &TimeSeriesStore) -> usize {
         .sum()
 }
 
+/// Return the total number of state samples across all aircraft.
 pub fn state_count_for(store: &TimeSeriesStore) -> usize {
     store
         .data
@@ -554,10 +594,12 @@ pub fn state_count_for(store: &TimeSeriesStore) -> usize {
         .sum()
 }
 
+/// Return the number of distinct aircraft currently in the store.
 pub fn aircraft_count_for(store: &TimeSeriesStore) -> usize {
     store.data.iter().count()
 }
 
+/// Return the global minimum and maximum state timestamps across all aircraft.
 pub fn active_time_bounds(store: &TimeSeriesStore) -> Option<(f64, f64)> {
     let mut min_start: Option<f64> = None;
     let mut max_end: Option<f64> = None;
@@ -672,7 +714,7 @@ mod tests {
             toml_config: "[aircraft]\nname='F-16'".to_string(),
             initial_state: Some(mk_state(0.0)),
         };
-        store.append_event("a1".to_string(), 1.0, Event::Spawn(spawn));
+        store.append_event("a1".to_string(), 1.0, Event::Spawn(Box::new(spawn)));
 
         let entry = store.data.get("a1").unwrap();
         let config = entry.config.as_ref().unwrap();

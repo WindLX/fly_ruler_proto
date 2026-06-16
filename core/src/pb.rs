@@ -1,6 +1,10 @@
 // Generated protobuf module for the Fly Ruler wire schema.
 //
 // The generated code is produced by `core/build.rs` from `proto/fly_ruler.proto` at workspace root.
+
+#![allow(clippy::large_enum_variant)]
+#![allow(missing_docs)]
+
 include!(concat!(env!("OUT_DIR"), "/flyruler.rs"));
 
 #[cfg(test)]

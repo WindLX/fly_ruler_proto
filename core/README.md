@@ -1,0 +1,634 @@
+# Fly Ruler Protocol Kernel（中文文档）
+
+`fly_ruler_proto_core` 是 Fly Ruler 协议的内核实现，面向航空航天飞行模拟场景，提供高性能的二进制协议序列化、UDP 网络传输、时序数据存储与运行时编排能力。
+
+它位于 **Python SDK（发送端）** 与 **Godot Server（接收/可视化端）** 之间，支持每秒 1000Hz 以上的飞行器状态更新，并将延迟控制在微秒级序列化开销内。
+
+## 1. 协议概述
+
+### 1.1 核心设计
+
+| 项目 | 说明 |
+|------|------|
+| 应用协议 | protobuf 3 |
+| 传输层 | UDP（Tokio `UdpSocket`） |
+| 会话管理 | 应用层会话，基于 `client_uuid` + 握手/心跳维护 |
+| 序列化 | `prost` 生成 Rust 类型，运行时编码/解码 |
+| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "1.0.0"` |
+
+### 1.2 消息帧格式
+
+当前 UDP 实现中，每条消息直接编码为完整的 protobuf 二进制报文发送，不附加长度前缀：
+
+```rust
+let payload = prost::Message::encode_to_vec(&msg);
+socket.send(&payload).await?;
+```
+
+接收端将 UDP 报文整体解码为 `pb::Message`：
+
+```rust
+let msg = prost::Message::decode(&buf[..n])?;
+```
+
+> 注：项目历史文档中提到过面向 TCP 的 `[4-byte big-endian u32 length] + [N-byte protobuf]` 帧格式；当前 UDP 路径未使用该格式。若未来需要 TCP 传输，可在 `codec` 模块恢复长度前缀编解码。
+
+## 2. 工作区与目录结构
+
+```text
+fly_ruler_proto/
+├── Cargo.toml                  # 工作区定义
+├── justfile                    # 统一构建/测试入口
+├── proto/
+│   └── fly_ruler.proto         # Protobuf schema（唯一来源）
+├── core/
+│   ├── Cargo.toml
+│   ├── build.rs                # 编译期 prost 代码生成
+│   └── src/
+│       ├── lib.rs              # 公共 API 与 PROTOCOL_VERSION
+│       ├── pb.rs               # 生成的 protobuf 类型导出
+│       ├── transport.rs        # 传输层错误与工具
+│       ├── transport/
+│       │   ├── client.rs       # UDP 客户端 / AircraftClient
+│       │   └── server.rs       # UDP 服务端 / ServerRuntime
+│       ├── kernel.rs           # KernelRuntime 运行时编排
+│       ├── store.rs            # TimeSeriesStore 时序存储
+│       ├── config.rs           # 运行时配置
+│       ├── logging.rs          # tracing 日志初始化
+│       └── utils.rs            # 内部辅助函数（uuid_to_hex, now_secs）
+└── core/tests/
+    └── integration_core_flow.rs
+```
+
+## 3. Protobuf 协议
+
+Schema 源文件：`proto/fly_ruler.proto`。
+
+### 3.1 基础几何/状态消息
+
+```protobuf
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quaternion {
+  double w = 1;  // 实部
+  double x = 2;
+  double y = 3;
+  double z = 4;
+}
+
+message DerivedState {
+  double lat      = 1;  // 纬度
+  double lon      = 2;  // 经度
+  double altitude = 3;  // 高度
+  double alpha    = 4;  // 迎角
+  double beta     = 5;  // 侧滑角
+  double tas      = 6;  // 真空速
+  double eas      = 7;  // 当量空速
+  double gamma    = 8;  // 航迹倾斜角
+  double chi      = 9;  // 航迹方位角
+}
+
+message AircraftState {
+  Vector3              position         = 1;
+  Vector3              velocity         = 2;
+  Quaternion           attitude         = 3;
+  Vector3              angular_velocity = 4;
+  DerivedState         derived          = 5;
+  repeated CustomField custom_fields    = 6;
+}
+```
+
+### 3.2 飞行器事件
+
+```protobuf
+message AircraftSpawnInfo {
+  string        name          = 1;
+  string        toml_config   = 2;
+  AircraftState initial_state = 3;
+}
+
+message DespawnInfo {
+  optional string reason = 1;
+}
+
+message AircraftCommandInfo {
+  oneof kind {
+    AircraftSpawnInfo spawn        = 1;
+    DespawnInfo       despawn      = 2;
+    AircraftState     state_update = 3;
+    string            custom_event = 4;
+  }
+}
+
+message AircraftEvent {
+  Uuid                aircraft_id = 1;
+  AircraftCommandInfo info        = 2;
+}
+```
+
+### 3.3 请求/响应消息
+
+```protobuf
+message Handshake {
+  string version     = 1;
+  Uuid   client_uuid = 2;
+}
+
+message Heartbeat {
+  uint64 seq_num     = 1;
+  Uuid   client_uuid = 2;
+}
+
+message RequestCommand {
+  oneof kind {
+    Handshake     handshake      = 1;
+    Heartbeat     heartbeat      = 2;
+    AircraftEvent aircraft_event = 3;
+  }
+}
+
+message Request {
+  Uuid           id        = 1;
+  double         timestamp = 2;
+  RequestCommand command   = 3;
+}
+
+message ResponseData {
+  oneof kind {
+    bool ack              = 1;
+    Uuid aircraft_spawned = 2;
+  }
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED    = 0;
+  INVALID_AIRCRAFT_ID       = 1;
+  TOML_PARSE_ERROR          = 2;
+  UNKNOWN_FIELD             = 3;
+  PROTOCOL_VERSION_MISMATCH = 4;
+  INVALID_STATE             = 5;
+}
+
+message ResponseError {
+  ErrorCode code        = 1;
+  string    message     = 2;
+  Uuid      aircraft_id = 3;
+}
+
+message Response {
+  Uuid   id        = 1;
+  double timestamp = 2;
+  oneof result {
+    ResponseData  ok  = 3;
+    ResponseError err = 4;
+  }
+}
+
+message Message {
+  oneof envelope {
+    Request  request  = 1;
+    Response response = 2;
+  }
+}
+```
+
+## 4. 核心模块说明
+
+### 4.1 `lib.rs` — 公共 API 入口
+
+```rust
+pub const PROTOCOL_VERSION: &str = "1.0.0";
+```
+
+对外导出：
+
+- 模块：`config`、`kernel`、`logging`、`pb`、`store`、`transport`
+- 常用类型：`KernelRuntime`、`RuntimeError`、`TimeSeriesStore`、`AircraftClient`、`Client`、`Server`、`ServerRuntime`、各类 `Config` 等。
+
+### 4.2 `pb.rs` + `build.rs` — 代码生成
+
+`core/build.rs` 在编译期调用 `prost_build` 从 `../proto/fly_ruler.proto` 生成 Rust 结构体，并在 `pb.rs` 中通过 `include!` 嵌入：
+
+```rust
+include!(concat!(env!("OUT_DIR"), "/flyruler.rs"));
+```
+
+> 不要手动编辑生成的 protobuf 代码。
+
+### 4.3 `transport` 模块
+
+#### 错误类型 `TransportError`
+
+```rust
+pub enum TransportError {
+    Io(std::io::Error),
+    Decode(prost::DecodeError),
+    InvalidMessage(String),
+    UnregisteredClient,
+    ClientChannelClosed(&'static str),
+}
+```
+
+#### `Client`（底层 UDP 客户端）
+
+```rust
+pub struct Client { ... }
+
+impl Client {
+    pub async fn connect(addr: &str, config: &LoggingConfig) -> Result<Self, TransportError>;
+    pub async fn send(&mut self, msg: pb::Message) -> Result<(), TransportError>;
+    pub async fn recv(&mut self) -> Result<Option<pb::Message>, TransportError>;
+    pub async fn close(&mut self) -> Result<(), TransportError>;
+}
+```
+
+#### `AircraftClient`（面向飞行器的高层客户端）
+
+一个 `AircraftClient` 实例绑定一架飞行器的完整生命周期：
+
+```rust
+pub async fn connect(
+    addr: &str,
+    logging_config: &LoggingConfig,
+    aircraft_name: String,
+    initial_state: pb::AircraftState,
+    toml_config: String,
+    heartbeat_interval_secs: f64,
+) -> Result<Self, TransportError>;
+
+pub fn update_state(&self, state: pb::AircraftState, timestamp: Option<f64>) -> Result<(), TransportError>;
+pub fn create_event(&self, event_name: String, timestamp: Option<f64>) -> Result<(), TransportError>;
+pub async fn despawn(&mut self, reason: Option<String>, timestamp: Option<f64>) -> Result<(), TransportError>;
+pub async fn close(&mut self) -> Result<(), TransportError>;
+```
+
+内部结构：
+
+- `sender_handle`：后台 UDP 发送循环
+- `operation_handle`：操作队列处理循环
+- `heartbeat_handle`：定时心跳发送
+
+#### `Server` 与 `ServerRuntime`
+
+```rust
+pub struct Server { ... }
+
+impl Server {
+    pub async fn bind(addr: &str) -> Result<Self, TransportError>;
+    pub async fn recv_from(&self) -> Result<Option<(pb::Message, SocketAddr, Option<String>)>, TransportError>;
+    pub async fn send_to(&self, msg: pb::Message, addr: SocketAddr) -> Result<(), TransportError>;
+    pub fn set_session(&self, addr: SocketAddr, client_uuid: String);
+    pub fn remove_session(&self, addr: SocketAddr);
+    pub fn active_sessions(&self) -> Vec<Session>;
+}
+
+pub struct ServerRuntime { ... }
+
+impl ServerRuntime {
+    pub async fn start<F>(
+        addr: &str,
+        config: &TransportConfig,
+        handler: F,
+    ) -> Result<Self, TransportError>
+    where
+        F: Fn(pb::Message, SocketAddr) + Send + Sync + 'static;
+    pub async fn stop(&self) -> Result<(), TransportError>;
+    pub fn active_sessions(&self) -> Vec<Session>;
+}
+```
+
+`ServerRuntime::start` 内部会：
+
+1. `bind` UDP 端口；
+2. `tokio::spawn` 接收循环；
+3. 自动处理 `Handshake`（版本校验、注册会话、返回 ACK）；
+4. 自动处理 `Heartbeat`（刷新会话、返回 ACK）；
+5. 将 `AircraftEvent` 通过回调交给上层（如 `KernelRuntime`）。
+
+### 4.4 `kernel.rs` — 运行时编排
+
+```rust
+pub struct KernelRuntime {
+    store: Arc<TimeSeriesStore>,
+    config: RuntimeConfig,
+    udp_runtime: Option<ServerRuntime>,
+}
+
+pub enum RuntimeError {
+    Transport(TransportError),
+    Store(StoreError),
+}
+```
+
+主要 API：
+
+```rust
+impl KernelRuntime {
+    pub fn new(store: Arc<TimeSeriesStore>) -> Self;
+    pub fn with_config(store: Arc<TimeSeriesStore>, config: RuntimeConfig) -> Self;
+
+    pub async fn start_server(&mut self, addr: &str) -> Result<(), RuntimeError>;
+    pub async fn stop_server(&mut self) -> Result<(), RuntimeError>;
+
+    pub async fn active_sessions(&self) -> Vec<Session>;
+    pub fn udp_local_addr(&self) -> Result<SocketAddr, RuntimeError>;
+
+    pub fn save_session(&self, path: &Path) -> Result<(), RuntimeError>;
+    pub fn load_session(&self, path: &Path) -> Result<(), RuntimeError>;
+    pub fn clear_session(&self);
+}
+```
+
+`KernelRuntime` 将 UDP 服务端与 `TimeSeriesStore` 连接起来：收到事件后自动写入内存时序库，并支持会话查询与磁盘持久化。
+
+### 4.5 `store.rs` — 时序存储
+
+核心类型：
+
+```rust
+pub type AircraftId = String;
+
+pub struct AircraftConfig {
+    pub name: String,
+    pub toml_config: String,
+}
+
+pub enum Event {
+    Spawn(pb::AircraftSpawnInfo),
+    Despawn(pb::DespawnInfo),
+    Custom(String),
+}
+
+pub struct TimestampedState {
+    pub timestamp_secs: f64,
+    pub state: pb::AircraftState,
+}
+
+pub struct TimestampedEvent {
+    pub timestamp_secs: f64,
+    pub event: Event,
+}
+
+pub struct AircraftTimeSeries {
+    pub states: Vec<TimestampedState>,
+    pub events: Vec<TimestampedEvent>,
+    pub config: Option<AircraftConfig>,
+}
+
+pub struct TimeSeriesStore {
+    data: DashMap<AircraftId, AircraftTimeSeries>,
+}
+```
+
+主要 API：
+
+```rust
+impl TimeSeriesStore {
+    pub fn new() -> Self;
+
+    pub fn append_state(&self, id: AircraftId, timestamp_secs: f64, state: pb::AircraftState);
+    pub fn append_event(&self, id: AircraftId, timestamp_secs: f64, event: Event);
+    pub fn append_message(&self, msg: pb::AircraftEvent);
+    pub fn append_message_with_config(&self, msg: pb::AircraftEvent, config: Option<AircraftConfig>);
+
+    pub fn get_latest(&self, id: &AircraftId) -> Option<TimestampedState>;
+    pub fn get_states_range(&self, id: &AircraftId, start: f64, end: f64) -> Option<Vec<TimestampedState>>;
+    pub fn get_events_range(&self, id: &AircraftId, start: f64, end: f64) -> Option<Vec<TimestampedEvent>>;
+    pub fn get_aircraft_ids(&self) -> Vec<AircraftId>;
+    pub fn clear(&self);
+
+    pub fn save_to_disk(&self, path: &Path) -> Result<(), StoreError>;
+    pub fn load_from_disk(&self, path: &Path) -> Result<(), StoreError>;
+}
+```
+
+持久化格式：
+
+- `meta.json`：版本、飞行器列表、时间范围、计数等元数据
+- `states.parquet`：Arrow/Parquet 二进制（含 aircraft_id、timestamp、protobuf payload）
+- `events.parquet`：Arrow/Parquet 二进制（含 aircraft_id、timestamp、event_type、payload）
+
+### 4.6 `config.rs` — 运行时配置
+
+```rust
+pub struct TransportConfig {
+    pub heartbeat_interval_secs: u64,  // 默认 5
+    pub heartbeat_timeout_secs: u64,   // 默认 15
+}
+
+pub struct StoreConfig;
+
+pub struct LoggingConfig {
+    pub level: String,                 // 默认 "warn"
+    pub file_path: Option<String>,
+}
+
+pub struct RuntimeConfig {
+    pub transport: TransportConfig,
+    pub store: StoreConfig,
+    pub logging: LoggingConfig,
+}
+```
+
+### 4.7 `logging.rs` — 日志初始化
+
+- 使用 `tracing_subscriber` + `tracing_appender`
+- 全局 `OnceLock` 保证仅初始化一次
+- 默认过滤：`warn` 全局，并对核心模块设置 `info`/`warn` 级别
+- `RUST_LOG` 环境变量优先
+
+## 5. 错误处理
+
+### 5.1 Rust 错误类型层次
+
+```text
+RuntimeError
+├── TransportError
+│   ├── Io
+│   ├── Decode
+│   ├── InvalidMessage
+│   ├── UnregisteredClient
+│   └── ClientChannelClosed
+└── StoreError
+    ├── Io
+    ├── Json
+    ├── Parquet
+    ├── Arrow
+    ├── Decode
+    └── InvalidData
+```
+
+### 5.2 Protobuf 错误码
+
+| 错误码 | 含义 |
+|--------|------|
+| `ERROR_CODE_UNSPECIFIED` | 未指定错误 |
+| `INVALID_AIRCRAFT_ID` | 飞行器 ID 无效 |
+| `TOML_PARSE_ERROR` | TOML 配置解析失败 |
+| `UNKNOWN_FIELD` | 未知字段 |
+| `PROTOCOL_VERSION_MISMATCH` | 协议版本不匹配 |
+| `INVALID_STATE` | 状态数据无效 |
+
+服务端在 `Handshake` 阶段校验客户端发送的版本号；若与 `PROTOCOL_VERSION` 不一致，则返回 `PROTOCOL_VERSION_MISMATCH`。
+
+## 6. 生命周期
+
+### 6.1 客户端生命周期（`AircraftClient`）
+
+1. **连接阶段**：调用 `AircraftClient::connect()`
+   - 创建底层 `Client`
+   - 启动 sender / operation / heartbeat 三个后台任务
+   - 自动发送 `Handshake`
+   - 自动发送 `Spawn`（携带 `aircraft_name`、`toml_config`、`initial_state`）
+2. **运行阶段**：
+   - 用户调用 `update_state()` / `create_event()` → 通过 mpsc 操作队列异步发送
+   - 心跳后台按 `heartbeat_interval_secs` 自动发送 `Heartbeat`
+3. **关闭阶段**：调用 `close()`
+   - 若尚未 despawn，自动发送 `Despawn(reason = "client_close")`
+   - 停止心跳、终止 operation 任务
+   - 等待所有后台任务结束
+
+### 6.2 服务端生命周期（`ServerRuntime`）
+
+1. **启动阶段**：`ServerRuntime::start()`
+   - `Server::bind()` 绑定 UDP 端口
+   - `tokio::spawn` 启动接收循环
+2. **运行阶段**：
+   - 收到 `Handshake` → 版本校验 → 注册会话 → 返回 ACK
+   - 收到 `Heartbeat` → 刷新 `last_seen_secs` → 返回 ACK
+   - 收到 `AircraftEvent` → 通过回调交给 `KernelRuntime` → 写入 `TimeSeriesStore`
+   - 定期清理超过 `heartbeat_timeout_secs` 未活跃的会话
+3. **停止阶段**：`stop()`
+   - `CancellationToken::cancel()` 触发退出
+   - 等待接收任务结束
+   - 关闭 socket
+
+## 7. 使用示例
+
+### 7.1 最小服务端
+
+```rust
+use std::sync::Arc;
+use fly_ruler_proto_core::{KernelRuntime, TimeSeriesStore, LoggingConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(TimeSeriesStore::new());
+    let config = RuntimeConfig {
+        logging: LoggingConfig::default(),
+        ..Default::default()
+    };
+    let mut runtime = KernelRuntime::with_config(store, config);
+
+    runtime.start_server("127.0.0.1:8080").await?;
+    println!("server listening on {}", runtime.udp_local_addr()?);
+
+    // 运行一段时间 ...
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+    runtime.stop_server().await;
+    Ok(())
+}
+```
+
+### 7.2 最小客户端
+
+```rust
+use fly_ruler_proto_core::transport::AircraftClient;
+use fly_ruler_proto_core::pb;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let initial_state = pb::AircraftState {
+        // ... 初始化 position / velocity / attitude
+        ..Default::default()
+    };
+
+    let mut client = AircraftClient::connect(
+        "127.0.0.1:8080",
+        &LoggingConfig::default(),
+        "F-16".to_string(),
+        initial_state,
+        "[aircraft]\nname='F-16'".to_string(),
+        1.0,
+    ).await?;
+
+    // 发送状态更新
+    let state = pb::AircraftState { /* ... */ };
+    client.update_state(state, None)?;
+
+    // 发送自定义事件
+    client.create_event("missile_launch".to_string(), None)?;
+
+    // 结束生命周期
+    client.despawn(Some("mission_complete".to_string()), None).await?;
+    client.close().await?;
+    Ok(())
+}
+```
+
+### 7.3 查询与持久化
+
+```rust
+use fly_ruler_proto_core::{KernelRuntime, TimeSeriesStore, RuntimeConfig};
+use std::sync::Arc;
+use std::path::Path;
+
+let store = Arc::new(TimeSeriesStore::new());
+
+// 查询最新状态
+if let Some(ts) = store.get_latest("some-aircraft-uuid") {
+    println!("timestamp={}", ts.timestamp_secs);
+}
+
+// 保存到磁盘
+store.save_to_disk(Path::new("session_backup"))?;
+
+// 从磁盘恢复
+store.load_from_disk(Path::new("session_backup"))?;
+```
+
+## 8. 构建与测试
+
+推荐使用 `justfile` 提供的统一入口：
+
+```bash
+just check        # fmt + clippy
+just test         # Rust + Python 测试
+just test-rs      # cargo test --workspace
+```
+
+手动等价命令：
+
+```bash
+# 构建内核
+cargo build -p fly_ruler_proto_core
+
+# 运行内核单元测试与集成测试
+cargo test -p fly_ruler_proto_core
+```
+
+集成测试位于 `core/tests/integration_core_flow.rs`，覆盖：
+
+- UDP 运行时端到端：握手 → 生成 → 心跳 → 数据写入 → 会话可见
+- `save_session` / `load_session` / `clear_session` 完整往返
+
+## 9. 关键设计决策
+
+1. **单一协议版本来源**：`PROTOCOL_VERSION` 仅定义在 `core/src/lib.rs`，所有绑定共享。
+2. **显式持久化**：`save_to_disk` / `load_from_disk` 必须显式调用，不自动保存。
+3. **DashMap 并发存储**：`TimeSeriesStore` 使用 `DashMap` 支持无锁并发读写。
+4. **Parquet + Arrow 持久化**：状态/事件以 protobuf bytes 存入 Parquet，元数据存 JSON。
+5. **应用层会话**：UDP 无连接，通过 `Handshake` / `Heartbeat` 中的 `client_uuid` 维护会话状态。
+6. **ACK 策略**：`Handshake` 和 `Heartbeat` 成功均返回 ACK；版本不匹配返回错误响应。
+
+## 10. 相关文档
+
+- Python 绑定：`../bindings/python/README.md`
+- Godot 绑定：`../bindings/godot/README.md`
+- 项目总览：`../CLAUDE.md`
+- Protobuf Schema：`../proto/fly_ruler.proto`

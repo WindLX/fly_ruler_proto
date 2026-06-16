@@ -4,25 +4,31 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::UdpSocket;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::config::TransportConfig;
 use crate::pb;
+use crate::utils::{now_secs, uuid_to_hex};
 use crate::PROTOCOL_VERSION;
 
-use super::{now_secs, uuid_to_hex, TransportError};
+use super::TransportError;
 
+/// Session metadata for a connected client.
 #[derive(Debug, Clone)]
 pub struct Session {
+    /// Remote socket address.
     pub addr: SocketAddr,
+    /// Client UUID as a lowercase hex string.
     pub client_uuid_hex: String,
+    /// Last seen timestamp in seconds since the Unix epoch.
     pub last_seen_secs: f64,
 }
 
 impl Session {
+    /// Create a new session for the given address and client UUID.
     pub fn new(addr: SocketAddr, client_uuid_hex: String) -> Self {
         Self {
             addr,
@@ -31,6 +37,7 @@ impl Session {
         }
     }
 
+    /// Return true if the session has been inactive longer than `timeout_secs`.
     pub fn is_expired(&self, timeout_secs: f64) -> bool {
         let now = now_secs();
         self.last_seen_secs + timeout_secs < now
@@ -161,6 +168,7 @@ impl SessionState {
     }
 }
 
+/// Low-level UDP server with session bookkeeping.
 pub struct Server {
     socket: Arc<UdpSocket>,
     sessions: SessionState,
@@ -168,6 +176,7 @@ pub struct Server {
 }
 
 impl Server {
+    /// Bind a UDP socket to the given address.
     pub async fn bind(addr: &str, config: TransportConfig) -> Result<Self, TransportError> {
         let socket = UdpSocket::bind(addr).await?;
         let local_addr = socket.local_addr()?;
@@ -179,6 +188,7 @@ impl Server {
         })
     }
 
+    /// Receive one message from the socket, cleaning up expired sessions first.
     pub async fn recv_from(
         &self,
     ) -> Result<Option<(pb::Message, SocketAddr, Option<String>)>, TransportError> {
@@ -215,6 +225,7 @@ impl Server {
         Ok(Some((msg, addr, client_uuid)))
     }
 
+    /// Send a protobuf message to the given address.
     pub async fn send_to(&self, msg: pb::Message, addr: SocketAddr) -> Result<(), TransportError> {
         let payload = prost::Message::encode_to_vec(&msg);
         self.socket.send_to(&payload, addr).await?;
@@ -222,29 +233,39 @@ impl Server {
         Ok(())
     }
 
+    /// Close the server socket.
     pub async fn close(&self) -> Result<(), TransportError> {
         let local_addr = self.socket.local_addr()?;
         info!(target: "fly_ruler_proto_core.transport", local_addr = %local_addr, "udp server closed");
         Ok(())
     }
 
+    /// Return the local socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
         Ok(self.socket.local_addr()?)
     }
 
+    /// Register or replace a session for the given address and client UUID.
     pub async fn set_session(&self, addr: SocketAddr, client_uuid: String) {
         self.sessions.set_session(addr, client_uuid).await;
     }
 
+    /// Remove the session associated with the given address.
     pub async fn remove_session(&self, addr: SocketAddr) {
         self.sessions.remove_by_addr(addr).await;
     }
 
+    /// Return the list of currently active sessions.
     pub async fn active_sessions(&self) -> Vec<Session> {
         self.sessions.list().await
     }
 }
 
+/// Long-running UDP server runtime with automatic handshake/heartbeat ACK.
+///
+/// The `handler` callback is invoked synchronously from the async receive loop
+/// for each non-handshake/heartbeat message. It must not block; offload heavy
+/// work to a separate task if necessary.
 pub struct ServerRuntime {
     server: Arc<Server>,
     stop_token: CancellationToken,
@@ -252,6 +273,11 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
+    /// Start a server runtime on the given address.
+    ///
+    /// `handler` is called for each aircraft event message. It must be
+    /// non-blocking; any synchronous I/O or heavy computation will stall the
+    /// UDP receive loop.
     pub async fn start<F>(
         addr: &str,
         config: &TransportConfig,
@@ -345,6 +371,7 @@ impl ServerRuntime {
         })
     }
 
+    /// Stop the server runtime and close the socket.
     pub async fn stop(&mut self) -> Result<(), TransportError> {
         self.stop_token.cancel();
         if let Some(handle) = self.recv_handle.take() {
@@ -353,10 +380,12 @@ impl ServerRuntime {
         self.server.close().await
     }
 
+    /// Return the list of currently active sessions.
     pub async fn active_sessions(&self) -> Vec<Session> {
         self.server.active_sessions().await
     }
 
+    /// Return the local socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
         self.server.local_addr()
     }
