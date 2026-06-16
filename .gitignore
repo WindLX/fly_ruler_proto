@@ -7,3 +7,10 @@ __pycache__
 dist/
 build/
 *.egg-info/
+
+# PyO3 / maturin native extension build artifacts (Linux, Windows, macOS)
+*.so
+*.pyd
+*.dll
+*.dylib
+*.abi3.so
