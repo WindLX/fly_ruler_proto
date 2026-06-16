@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package flyruler;
+
+message Uuid {
+  bytes value = 1; // 16-byte UUID payload
+}
+
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quaternion {
+  double w = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+}
+
+message DerivedState {
+  double lat      = 1;
+  double lon      = 2;
+  double altitude = 3;
+  double alpha    = 4;
+  double beta     = 5;
+  double tas      = 6;
+  double eas      = 7;
+  double gamma    = 8;
+  double chi      = 9;
+}
+
+message FieldValue {
+  oneof kind {
+    double f64_value    = 1;
+    int64  i64_value    = 2;
+    bool   bool_value   = 3;
+    string string_value = 4;
+    bytes  bytes_value  = 5;
+  }
+}
+
+message CustomField {
+  string     field_id = 1;
+  FieldValue value    = 2;
+}
+
+message AircraftState {
+  Vector3              position         = 1;
+  Vector3              velocity         = 2;
+  Quaternion           attitude         = 3;
+  Vector3              angular_velocity = 4;
+  DerivedState         derived          = 5;
+  repeated CustomField custom_fields    = 6;
+}
+
+message AircraftSpawnInfo {
+  string        name          = 1;
+  string        toml_config   = 2;
+  AircraftState initial_state = 3;
+}
+
+message DespawnInfo {
+  optional string reason = 1;
+}
+
+message AircraftCommandInfo {
+  oneof kind {
+    AircraftSpawnInfo spawn        = 1;
+    DespawnInfo       despawn      = 2;
+    AircraftState     state_update = 3;
+    string            custom_event = 4;
+  }
+}
+
+message AircraftEvent {
+  Uuid                aircraft_id = 1;
+  AircraftCommandInfo info        = 2;
+}
+
+message Handshake {
+  string version     = 1;
+  Uuid   client_uuid = 2;
+}
+
+message Heartbeat {
+  uint64 seq_num     = 1;
+  Uuid   client_uuid = 2;
+}
+
+message RequestCommand {
+  oneof kind {
+    Handshake     handshake      = 1;
+    Heartbeat     heartbeat      = 2;
+    AircraftEvent aircraft_event = 3;
+  }
+}
+
+message Request {
+  Uuid           id        = 1;
+  double         timestamp = 2;
+  RequestCommand command   = 3;
+}
+
+message ResponseData {
+  oneof kind {
+    bool ack              = 1;
+    Uuid aircraft_spawned = 2;
+  }
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED    = 0;
+  INVALID_AIRCRAFT_ID       = 1;
+  TOML_PARSE_ERROR          = 2;
+  UNKNOWN_FIELD             = 3;
+  PROTOCOL_VERSION_MISMATCH = 4;
+  INVALID_STATE             = 5;
+}
+
+message ResponseError {
+  ErrorCode code        = 1;
+  string    message     = 2;
+  Uuid      aircraft_id = 3;
+}
+
+message Response {
+  Uuid   id        = 1;
+  double timestamp = 2;
+  oneof result {
+    ResponseData  ok  = 3;
+    ResponseError err = 4;
+  }
+}
+
+message Message {
+  oneof envelope {
+    Request  request  = 1;
+    Response response = 2;
+  }
+}

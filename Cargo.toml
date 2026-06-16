@@ -1,0 +1,14 @@
+[workspace]
+members = ["core", "bindings/python", "bindings/godot"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.4"

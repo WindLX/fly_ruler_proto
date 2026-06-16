@@ -1,0 +1,13 @@
+[package]
+name = "fly_ruler_proto_godot"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+fly_ruler_proto_core = { path = "../../core" }
+tokio.workspace = true
+tracing.workspace = true
+godot = "0.5.0"

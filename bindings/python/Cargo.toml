@@ -1,0 +1,20 @@
+[package]
+name = "fly_ruler_proto_python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "_core"
+# "cdylib" is necessary to produce a shared library for Python to import from.
+crate-type = ["cdylib"]
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+fly_ruler_proto_core = { path = "../../core" }
+# Python bindings dependencies
+# "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
+# "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
+pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py39"] }
