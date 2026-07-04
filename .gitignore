@@ -16,3 +16,6 @@ build/
 *.dll
 *.dylib
 *.abi3.so
+
+# github action
+actions-runner

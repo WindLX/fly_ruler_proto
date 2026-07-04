@@ -121,7 +121,7 @@ jobs:
   #      msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi \
   #        --directory .msfs2024-sdk
   #   2. Upload .msfs2024-sdk as a GitHub Actions cache with key
-  #      "msfs2024-sdk-v1"
+  #      "msfs2024-sdk-1.6.9-linux-v1"
   # ============================================================
   build-msfs:
     name: Build MSFS bridge (Windows cross-compile)
@@ -135,14 +135,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .msfs2024-sdk
-          key: msfs2024-sdk-v1
+          key: msfs2024-sdk-1.6.9-linux-v1
       - name: Check SDK availability
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           echo "::error::MSFS 2024 SDK cache miss."
           echo "::error::Please extract the SDK locally and seed the cache."
           echo "::error::  msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi --directory .msfs2024-sdk"
-          echo "::error::Then upload .msfs2024-sdk as a cache with key 'msfs2024-sdk-v1'"
+          echo "::error::Then upload .msfs2024-sdk as a cache with key 'msfs2024-sdk-1.6.9-linux-v1'"
           exit 1
       - name: Set MSFS SDK environment variable
         run: echo "MSFS2024_SDK=$(pwd)/.msfs2024-sdk/MSFS 2024 SDK" >> $GITHUB_ENV

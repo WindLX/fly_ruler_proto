@@ -1,0 +1,45 @@
+name: Seed MSFS SDK cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_root:
+        description: "Local MSFS 2024 SDK root"
+        required: true
+        default: "/home/windlx/Work/Project/AircraftModels/FlyRuler/packages/fly_ruler_proto/.msfs2024-sdk/MSFS 2024 SDK"
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: [self-hosted, linux, x64, msfs-sdk]
+
+    steps:
+      - name: Stage minimal SimConnect SDK
+        shell: bash
+        env:
+          SDK_ROOT: ${{ inputs.sdk_root }}
+        run: |
+          set -euo pipefail
+
+          dst="$GITHUB_WORKSPACE/.msfs2024-sdk/MSFS 2024 SDK/SimConnect SDK"
+          rm -rf "$GITHUB_WORKSPACE/.msfs2024-sdk"
+
+          install -Dm644 \
+            "$SDK_ROOT/SimConnect SDK/include/SimConnect.h" \
+            "$dst/include/SimConnect.h"
+
+          install -Dm644 \
+            "$SDK_ROOT/SimConnect SDK/lib/SimConnect.lib" \
+            "$dst/lib/SimConnect.lib"
+
+          install -Dm644 \
+            "$SDK_ROOT/SimConnect SDK/lib/SimConnect.dll" \
+            "$dst/lib/SimConnect.dll"
+
+      - name: Save MSFS SDK cache
+        uses: actions/cache/save@v4
+        with:
+          path: .msfs2024-sdk
+          key: msfs2024-sdk-1.6.9-linux-v1
