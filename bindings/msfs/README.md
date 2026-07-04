@@ -64,19 +64,39 @@ The bridge freezes latitude/longitude, altitude, and attitude only after the fir
 Useful options:
 
 ```text
+--config ./fly-ruler-msfs.toml
 --listen 127.0.0.1:8080
 --aircraft-id <32-character FlyRuler UUID>
 --tick-hz 240
 --stale-timeout-ms 500
 --http-listen 127.0.0.1:8081
 --data-root ./sessions
+--web-root ./web/dist
 --ws-hz 30
 --cors-origin http://localhost:5173
+--http
 --no-http
+--log-level info
+--log-file ./logs/fly-ruler-msfs.log
 ```
 
 Unless `--no-http` is supplied, the bridge embeds the same management service as `fly-ruler-server`. REST playback commands immediately affect SimConnect:
 Live follows the newest sample, paused replay writes a seek exactly once, and playing replay advances using previous-value hold. A seek, load, clear, or other playback revision forces an explicit SimConnect refresh even when the selected sample has the same timestamp.
+
+## TOML configuration and logging
+
+Copy `fly-ruler-msfs.example.toml` to `fly-ruler-msfs.toml`, or pass a custom
+path through `--config`. If `--config` is omitted, the bridge automatically
+loads `fly-ruler-msfs.toml` from the current directory when it exists.
+
+Configuration precedence is CLI, then TOML, then built-in defaults. Relative
+`data_root`, `web_root`, and `logging.file_path` values are resolved relative
+to the TOML file. `--http` and `--no-http` explicitly override
+`management.enabled`.
+
+The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the
+Python binding. `RUST_LOG` has priority over the configured log level. Without
+`logging.file_path`, structured logs are written to the terminal.
 
 ## State contract
 
@@ -105,8 +125,3 @@ flyruler.control.spoilers_ratio
 ```
 
 Ratios outside `0..=1`, engine indices outside `1..=4`, non-numeric values, and non-finite values are ignored independently without dropping the frame. Some complex third-party aircraft may override these SimVars; use a stock aircraft for the first integration test.
-
-# TODO
-
-- [ ] 引入 tracer log 和 python 还有 core 保持一致
-- [ ] 从 TOML 配置文件传入参数

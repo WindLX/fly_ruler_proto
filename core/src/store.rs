@@ -382,6 +382,25 @@ impl TimeSeriesStore {
         })
     }
 
+    pub(crate) fn visit_states_range<R>(
+        &self,
+        id: &AircraftId,
+        start: f64,
+        end: f64,
+        visitor: impl FnOnce(&[TimestampedState]) -> R,
+    ) -> Option<R> {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
+            let first = series
+                .states
+                .partition_point(|state| state.timestamp_secs < start);
+            let last = series
+                .states
+                .partition_point(|state| state.timestamp_secs <= end);
+            visitor(&series.states[first..last])
+        })
+    }
+
     /// Return all events for an aircraft within the inclusive time range.
     pub fn get_events_range(
         &self,

@@ -325,7 +325,10 @@ impl SimConnectClient {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        eprintln!("warning: timed out reading MSFS freeze state; assuming all axes unfrozen");
+        tracing::warn!(
+            target: "fly_ruler_proto_msfs.bridge",
+            "timed out reading MSFS freeze state; assuming all axes unfrozen"
+        );
         Ok([false; 3])
     }
 
@@ -348,12 +351,19 @@ impl SimConnectClient {
         while Instant::now() < deadline {
             if let Dispatch::EngineCount(value) = self.next_dispatch()? {
                 let value = value.min(4);
-                println!("MSFS reports {value} engine(s); bridge supports up to 4");
+                tracing::info!(
+                    target: "fly_ruler_proto_msfs.bridge",
+                    engine_count = value,
+                    "MSFS engine count detected; bridge supports up to 4"
+                );
                 return Ok(value);
             }
             thread::sleep(Duration::from_millis(10));
         }
-        eprintln!("warning: timed out reading MSFS engine count; assuming 4 engines");
+        tracing::warn!(
+            target: "fly_ruler_proto_msfs.bridge",
+            "timed out reading MSFS engine count; assuming 4 engines"
+        );
         Ok(4)
     }
 
@@ -494,9 +504,11 @@ impl Simulator for SimConnectClient {
         if index > self.engine_count {
             let reported = &mut self.reported_unsupported_engines[index as usize - 1];
             if !*reported {
-                eprintln!(
-                    "warning: ignoring throttle for engine {index}; current aircraft has {} engine(s)",
-                    self.engine_count
+                tracing::warn!(
+                    target: "fly_ruler_proto_msfs.bridge",
+                    engine_index = index,
+                    engine_count = self.engine_count,
+                    "ignoring throttle for engine not present on current aircraft"
                 );
                 *reported = true;
             }

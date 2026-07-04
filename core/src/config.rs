@@ -35,6 +35,8 @@ pub struct StoreConfig;
 pub struct ManagementConfig {
     /// Directory containing named persisted sessions.
     pub data_root: PathBuf,
+    /// Optional Vite distribution directory served as a single-page app.
+    pub web_root: Option<PathBuf>,
     /// Aggregate WebSocket snapshot frequency.
     pub websocket_hz: f64,
     /// Browser origins allowed to access the localhost API.
@@ -45,6 +47,7 @@ impl Default for ManagementConfig {
     fn default() -> Self {
         Self {
             data_root: PathBuf::from("sessions"),
+            web_root: Some(PathBuf::from("web/dist")),
             websocket_hz: 30.0,
             cors_origins: vec![
                 "http://localhost:3000".to_string(),

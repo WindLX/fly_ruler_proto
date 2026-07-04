@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock as SyncRwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -15,7 +15,7 @@ use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header::{CONTENT_TYPE, ORIGIN};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -27,6 +27,7 @@ use tokio::sync::{broadcast, Notify, RwLock as AsyncRwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -42,100 +43,18 @@ use crate::transport::SessionHandle;
 use crate::utils::now_secs;
 use crate::PROTOCOL_VERSION;
 
+mod gate;
+pub use gate::IngestionGate;
+mod series;
+mod workspace;
+
+use series::{SeriesError, SeriesQueryRequest};
+use workspace::{WorkspaceError, WorkspaceSnapshot, WorkspaceStore};
+
 const MAX_PAGE_LIMIT: usize = 10_000;
 const DEFAULT_PAGE_LIMIT: usize = 1_000;
 const MAX_WS_AIRCRAFT: usize = 64;
 const MAX_OPERATIONS: usize = 128;
-
-/// Gate used to briefly pause high-frequency ingestion during maintenance.
-pub struct IngestionGate {
-    enabled: AtomicBool,
-    dropped: AtomicU64,
-    maintenance: Mutex<()>,
-    activity: SyncRwLock<()>,
-}
-
-impl Default for IngestionGate {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IngestionGate {
-    /// Create an enabled ingestion gate.
-    pub fn new() -> Self {
-        Self {
-            enabled: AtomicBool::new(true),
-            dropped: AtomicU64::new(0),
-            maintenance: Mutex::new(()),
-            activity: SyncRwLock::new(()),
-        }
-    }
-
-    /// Run one append while holding a shared ingestion permit.
-    ///
-    /// Returns `None` and increments the maintenance drop counter when a
-    /// maintenance window is active.
-    pub fn with_ingestion<T>(&self, action: impl FnOnce() -> T) -> Option<T> {
-        if !self.enabled.load(Ordering::Acquire) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        let activity = self
-            .activity
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !self.enabled.load(Ordering::Acquire) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        let result = action();
-        drop(activity);
-        Some(result)
-    }
-
-    /// Execute a short critical section with ingestion disabled.
-    pub fn with_paused<T>(&self, action: impl FnOnce() -> T) -> T {
-        let lock = lock_unpoisoned(&self.maintenance);
-        self.enabled.store(false, Ordering::Release);
-        let activity = self
-            .activity
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let guard = ResumeIngestion {
-            gate: self,
-            lock,
-            activity,
-        };
-        let result = action();
-        drop(guard);
-        result
-    }
-
-    /// Return whether ingestion is currently enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Acquire)
-    }
-
-    /// Return the number of datagrams dropped during maintenance windows.
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
-    }
-}
-
-struct ResumeIngestion<'a> {
-    gate: &'a IngestionGate,
-    #[allow(dead_code)]
-    lock: MutexGuard<'a, ()>,
-    #[allow(dead_code)]
-    activity: std::sync::RwLockWriteGuard<'a, ()>,
-}
-
-impl Drop for ResumeIngestion<'_> {
-    fn drop(&mut self) {
-        self.gate.enabled.store(true, Ordering::Release);
-    }
-}
 
 /// Persistence operation lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -189,6 +108,7 @@ struct AppState {
     sessions: Arc<AsyncRwLock<Option<SessionHandle>>>,
     config: ManagementConfig,
     operations: OperationManager,
+    workspace: Arc<WorkspaceStore>,
     shutdown: CancellationToken,
 }
 
@@ -288,6 +208,13 @@ impl OperationManager {
         }));
     }
 
+    fn notify_workspace_changed(&self, revision: u64) {
+        let _ = self.notifications.send(json!({
+            "type": "workspace_changed",
+            "revision": revision,
+        }));
+    }
+
     fn run_when_idle<T>(&self, action: impl FnOnce() -> T) -> Result<T, ApiError> {
         let _coordination = lock_unpoisoned(&self.coordination);
         if self.is_active() {
@@ -346,6 +273,7 @@ impl ManagementServerRuntime {
             sessions,
             config: config.clone(),
             operations: operations.clone(),
+            workspace: Arc::new(WorkspaceStore::new(&config.data_root)),
             shutdown: shutdown.clone(),
         };
 
@@ -399,7 +327,15 @@ fn configured_router(state: AppState) -> Result<Router, ManagementError> {
         .allow_methods([Method::GET, Method::POST, Method::PUT])
         .allow_headers([CONTENT_TYPE, ORIGIN]);
 
-    Ok(router(state).layer(cors).layer(TraceLayer::new_for_http()))
+    let web_root = state.config.web_root.clone();
+    let mut app = router(state);
+    if let Some(root) = web_root.filter(|root| root.join("index.html").is_file()) {
+        let static_files = ServeDir::new(&root).fallback(ServeFile::new(root.join("index.html")));
+        app = app.fallback_service(static_files);
+    } else {
+        app = app.fallback(route_not_found);
+    }
+    Ok(app.layer(cors).layer(TraceLayer::new_for_http()))
 }
 
 fn router(state: AppState) -> Router {
@@ -410,6 +346,8 @@ fn router(state: AppState) -> Router {
         .route("/api/v1/aircraft/{id}/state", get(aircraft_state))
         .route("/api/v1/aircraft/{id}/states", get(aircraft_states))
         .route("/api/v1/aircraft/{id}/events", get(aircraft_events))
+        .route("/api/v1/aircraft/{id}/series/catalog", get(series_catalog))
+        .route("/api/v1/series/query", post(series_query))
         .route("/api/v1/playback", get(playback_status))
         .route("/api/v1/playback/live", post(playback_live))
         .route("/api/v1/playback/pause", post(playback_pause))
@@ -421,8 +359,10 @@ fn router(state: AppState) -> Router {
         .route("/api/v1/sessions/{name}/save", post(session_save))
         .route("/api/v1/sessions/{name}/load", post(session_load))
         .route("/api/v1/operations/{id}", get(operation_status))
+        .route("/api/v1/workspace", get(workspace_get).put(workspace_put))
         .route("/api/v1/ws", get(websocket))
-        .fallback(route_not_found)
+        .route("/api", any(route_not_found))
+        .route("/api/{*path}", any(route_not_found))
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(state)
 }
@@ -594,6 +534,32 @@ async fn aircraft_events(
         "limit": page.limit,
         "items": page.items.iter().map(timestamped_event_json).collect::<Vec<_>>(),
     })))
+}
+
+async fn series_catalog(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let store = Arc::clone(&state.store);
+    let aircraft_id = id.clone();
+    let catalog = tokio::task::spawn_blocking(move || series::catalog(&store, &aircraft_id))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::from)?;
+    Ok(Json(json!({ "aircraft_id": id, "fields": catalog })))
+}
+
+async fn series_query(
+    State(state): State<AppState>,
+    body: Result<Json<SeriesQueryRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let request = json_body(body)?;
+    let store = Arc::clone(&state.store);
+    let response = tokio::task::spawn_blocking(move || series::query(&store, request))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::from)?;
+    Ok(Json(json!(response)))
 }
 
 async fn playback_status(State(state): State<AppState>) -> Json<Value> {
@@ -837,6 +803,29 @@ async fn operation_status(
         .get(&id)
         .ok_or_else(|| ApiError::not_found("operation_not_found", "operation not found"))?;
     Ok(Json(json!({ "operation": operation })))
+}
+
+async fn workspace_get(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let workspace = Arc::clone(&state.workspace);
+    let document = tokio::task::spawn_blocking(move || workspace.load())
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::from)?;
+    Ok(Json(json!({ "workspace": document })))
+}
+
+async fn workspace_put(
+    State(state): State<AppState>,
+    body: Result<Json<WorkspaceSnapshot>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let snapshot = json_body(body)?;
+    let workspace = Arc::clone(&state.workspace);
+    let document = tokio::task::spawn_blocking(move || workspace.save(snapshot))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::from)?;
+    state.operations.notify_workspace_changed(document.revision);
+    Ok(Json(json!({ "workspace": document })))
 }
 
 #[derive(Deserialize)]
@@ -1250,6 +1239,38 @@ impl From<PlaybackError> for ApiError {
     }
 }
 
+impl From<SeriesError> for ApiError {
+    fn from(error: SeriesError) -> Self {
+        let status = match error {
+            SeriesError::AircraftNotFound(_) => StatusCode::NOT_FOUND,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        Self {
+            status,
+            code: "series_error",
+            message: error.to_string(),
+            details: None,
+        }
+    }
+}
+
+impl From<WorkspaceError> for ApiError {
+    fn from(error: WorkspaceError) -> Self {
+        let status = match error {
+            WorkspaceError::Io(_) | WorkspaceError::Json(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            WorkspaceError::TooLarge
+            | WorkspaceError::TooComplex
+            | WorkspaceError::InvalidValue => StatusCode::BAD_REQUEST,
+        };
+        Self {
+            status,
+            code: "workspace_error",
+            message: error.to_string(),
+            details: None,
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
@@ -1353,6 +1374,7 @@ mod tests {
             Arc::clone(&store),
             crate::ReplayConfig::default(),
         ));
+        let workspace = Arc::new(WorkspaceStore::new(&root));
         AppState {
             store,
             playback,
@@ -1364,6 +1386,7 @@ mod tests {
                 ..ManagementConfig::default()
             },
             operations: OperationManager::new(),
+            workspace,
             shutdown: CancellationToken::new(),
         }
     }
@@ -1485,6 +1508,57 @@ mod tests {
             response.headers()[ACCESS_CONTROL_ALLOW_ORIGIN],
             "http://localhost:5173"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn serves_spa_assets_but_keeps_api_errors_json() {
+        let root = test_root("static");
+        let web_root = root.join("web");
+        fs::create_dir_all(web_root.join("assets")).unwrap();
+        fs::write(web_root.join("index.html"), b"<main>FlyRuler</main>").unwrap();
+        fs::write(web_root.join("assets/app.js"), b"console.log('ok')").unwrap();
+        let mut state = test_state(root.clone());
+        state.config.web_root = Some(web_root);
+        let app = configured_router(state).unwrap();
+
+        let asset = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+
+        let fallback = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/replay/aircraft-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), StatusCode::OK);
+        let fallback_body = to_bytes(fallback.into_body(), 1024).await.unwrap();
+        assert_eq!(&fallback_body[..], b"<main>FlyRuler</main>");
+
+        let api_error = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/not-real")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(api_error.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response_json(api_error).await["code"], "route_not_found");
         let _ = fs::remove_dir_all(root);
     }
 

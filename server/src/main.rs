@@ -19,6 +19,9 @@ struct Args {
     #[arg(long, default_value = "./sessions")]
     data_root: PathBuf,
 
+    #[arg(long, default_value = "./web/dist")]
+    web_root: PathBuf,
+
     #[arg(long, default_value_t = 30.0)]
     ws_hz: f64,
 
@@ -33,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = RuntimeConfig {
         management: ManagementConfig {
             data_root: args.data_root,
+            web_root: Some(args.web_root),
             websocket_hz: args.ws_hz,
             cors_origins: if args.cors_origins.is_empty() {
                 defaults.cors_origins

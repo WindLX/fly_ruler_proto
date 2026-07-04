@@ -54,7 +54,11 @@ fly_ruler_proto/
 │       ├── kernel.rs           # KernelRuntime 运行时编排
 │       ├── store.rs            # TimeSeriesStore 时序存储
 │       ├── playback.rs         # Live/Replay 全局播放状态机
-│       ├── management.rs       # Axum HTTP/WebSocket 管理服务
+│       ├── management/         # Axum 管理服务、Series、Workspace 与持久化
+│       │   ├── mod.rs          # runtime/router/CORS/static hosting 与 handlers
+│       │   ├── gate.rs         # ingestion gate
+│       │   ├── series.rs       # 字段目录、历史曲线查询与 LTTB
+│       │   └── workspace.rs    # 全局 Web 工作区原子持久化
 │       ├── config.rs           # 运行时配置
 │       ├── logging.rs          # tracing 日志初始化
 │       └── utils.rs            # 内部辅助函数（uuid_to_hex, now_secs）
@@ -462,6 +466,7 @@ pub struct StoreConfig;
 
 pub struct ManagementConfig {
     pub data_root: PathBuf,             // 默认 ./sessions
+    pub web_root: Option<PathBuf>,       // 默认 ./web/dist
     pub websocket_hz: f64,              // 默认 30 Hz
     pub cors_origins: Vec<String>,
 }
@@ -513,10 +518,23 @@ REST 根路径为 `/api/v1`：
 | GET | `/sessions` | 列出数据根目录内的快照 |
 | POST | `/sessions/{name}/save`, `/load` | 异步保存/加载 |
 | GET | `/operations/{id}` | 查询异步操作状态 |
+| GET | `/aircraft/{id}/series/catalog` | 查询实际出现过的数值字段 |
+| POST | `/series/query` | 批量历史曲线与完整区间统计 |
+| GET/PUT | `/workspace` | 读取/保存跨浏览器工作区 |
 
 `/api/v1/ws` 是严格只读的聚合快照流。它发送 `hello`、`snapshot`、
-`operation_status` 和 `store_changed`；控制命令必须走 REST。未指定飞机
+`operation_status`、`store_changed` 和 `workspace_changed`；控制命令必须走 REST。未指定飞机
 筛选时最多发送 64 架，并用 `truncated` 标记截断。
+
+Series selector 使用带 `kind` 的 tagged JSON（`standard`、
+`engine_throttle`、`custom`），避免 custom field ID 中的点号产生歧义。
+一次查询最多 64 条曲线、每条 100–20,000 点；后端在完整区间统计后用
+LTTB 降采样。Workspace 保存在 `data_root/.fly-ruler/workspace.json`，
+每次更新递增 revision，并通知其他浏览器重新加载。
+
+`ManagementConfig.web_root` 指向存在的目录时，服务会托管 Vue SPA 并提供
+`index.html` fallback；目录缺失时保持 API-only，且 `/api/v1/*` 始终返回
+JSON 错误而不会被 SPA fallback 接管。
 
 保存时只在克隆一致内存快照期间暂停 ingestion，落盘在后台继续；加载先
 读入临时 Store，成功后才原子替换当前内存。维护窗口丢弃的 UDP 数量可从
@@ -725,6 +743,6 @@ cargo test -p fly_ruler_proto_core
 - Protobuf Schema：`../proto/fly_ruler.proto`
 - Crate 内 Schema 镜像：`proto/fly_ruler.proto`
 
-## 11. TODO
-
-- [ ] Management 太大，拆分为多个 mod
+The management implementation is split into dedicated gate, series, workspace,
+and HTTP runtime modules so persistence, replay control, and plotting queries
+can evolve independently.

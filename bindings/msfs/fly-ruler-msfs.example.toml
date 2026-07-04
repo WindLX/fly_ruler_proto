@@ -1,0 +1,20 @@
+[bridge]
+listen = "127.0.0.1:8080"
+# aircraft_id = "00112233445566778899aabbccddeeff"
+tick_hz = 240.0
+stale_timeout_ms = 500
+
+[management]
+enabled = true
+listen = "127.0.0.1:8081"
+data_root = "sessions"
+web_root = "web/dist"
+ws_hz = 30.0
+cors_origins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]
+
+[logging]
+level = "info"
+# file_path = "logs/fly-ruler-msfs.log"
