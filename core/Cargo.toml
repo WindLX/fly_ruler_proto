@@ -2,6 +2,11 @@
 name = "fly_ruler_proto_core"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
 
 [dependencies]
 tokio.workspace = true
