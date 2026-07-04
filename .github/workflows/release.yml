@@ -174,12 +174,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: wheels-*
           merge-multiple: true
-      - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
+      - name: Verify Python distributions
+        run: |
+          find dist -maxdepth 1 -type f -name '*.whl' -print
+          test -n "$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          test -z "$(find dist -maxdepth 1 -type f ! -name '*.whl' -print -quit)"
+      - name: Publish Python distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          command: upload
-          args: --non-interactive --skip-existing dist/*
+          packages-dir: dist
+          skip-existing: true
 
   # ============================================================
   # Create GitHub Release with all build artifacts
