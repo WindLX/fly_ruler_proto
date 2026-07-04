@@ -128,8 +128,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Windows Rust target
+        run: rustup target add x86_64-pc-windows-msvc
       - name: Install cargo-xwin
-        run: cargo install cargo-xwin
+        run: cargo install --locked cargo-xwin
       - name: Restore MSFS SDK from cache
         id: cache-sdk
         uses: actions/cache@v4
