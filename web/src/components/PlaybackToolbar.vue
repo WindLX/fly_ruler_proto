@@ -1,0 +1,74 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { CirclePause, CirclePlay, Radio, RefreshCw } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+import { useServerStore } from '@/stores/server'
+import { useWorkspaceStore } from '@/stores/workspace'
+
+const server = useServerStore()
+const workspace = useWorkspaceStore()
+const { t, locale } = useI18n()
+const speed = ref(1)
+const busy = ref(false)
+const playback = computed(() => server.playback)
+
+async function run(action: () => Promise<void>) {
+  busy.value = true
+  try {
+    await action()
+  } finally {
+    busy.value = false
+  }
+}
+
+function toggleTheme() {
+  workspace.workspace.theme = workspace.workspace.theme === 'dark' ? 'light' : 'dark'
+}
+
+function toggleLocale() {
+  locale.value = locale.value === 'zh-CN' ? 'en' : 'zh-CN'
+  workspace.workspace.locale = locale.value
+}
+</script>
+
+<template>
+  <header
+    class="flex min-h-14 items-center gap-2 border-b border-(--border-color) bg-(--panel-bg) px-3"
+  >
+    <div class="mr-2 flex items-center gap-2">
+      <span
+        class="h-2.5 w-2.5 rounded-full"
+        :class="server.connected ? 'bg-emerald-500' : 'bg-red-500'"
+      />
+      <strong class="text-sm">{{ t('app.title') }}</strong>
+    </div>
+    <button class="toolbar-button" :disabled="busy" @click="run(server.setLive)">
+      <Radio class="h-4 w-4" />{{ t('app.live') }}
+    </button>
+    <button class="toolbar-button" :disabled="busy" @click="run(server.pause)">
+      <CirclePause class="h-4 w-4" />{{ t('app.pause') }}
+    </button>
+    <button class="toolbar-button" :disabled="busy" @click="run(() => server.play(speed))">
+      <CirclePlay class="h-4 w-4" />{{ t('app.play') }}
+    </button>
+    <select v-model.number="speed" class="toolbar-select w-20">
+      <option v-for="value in [0.1, 0.25, 0.5, 1, 2, 4, 8, 16]" :key="value" :value="value">
+        {{ value }}×
+      </option>
+    </select>
+    <span class="mono ml-2 text-xs text-(--text-muted)">
+      {{ playback?.cursor_secs?.toFixed(3) ?? '—' }}
+      · {{ playback?.mode ?? 'offline' }}
+    </span>
+    <div class="ml-auto flex items-center gap-2">
+      <button class="toolbar-button" @click="server.refresh"><RefreshCw class="h-4 w-4" /></button>
+      <button class="toolbar-button" @click="toggleLocale">
+        {{ locale === 'zh-CN' ? 'EN' : '中' }}
+      </button>
+      <button class="toolbar-button" @click="toggleTheme">
+        {{ workspace.workspace.theme === 'dark' ? '☀' : '☾' }}
+      </button>
+    </div>
+  </header>
+</template>

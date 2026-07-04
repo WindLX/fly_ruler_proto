@@ -40,12 +40,34 @@ demo-msfs *ARGS:
 run-server *ARGS:
     cargo run -p fly_ruler_proto_server -- {{ARGS}}
 
+# Run the Vue management console with the Vite development proxy
+web-dev:
+    cd web && pnpm dev
+
+# Type-check and build the management console into web/dist
+web-build:
+    cd web && pnpm build
+
+# Lint, test, type-check, and build the management console
+web-check:
+    cd web && pnpm check
+
+# Run the backend and Vite development server together
+dev-console *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run -p fly_ruler_proto_server -- {{ARGS}} &
+    server_pid=$!
+    trap 'kill "${server_pid}" 2>/dev/null || true' EXIT INT TERM
+    cd web
+    pnpm dev
+
 # Run all static checks
 _check-rs:
     cargo fmt --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-check: _check-rs
+check: _check-rs web-check
     @echo "All checks passed"
 
 # Auto-format Rust code

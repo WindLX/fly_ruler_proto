@@ -1,0 +1,164 @@
+@import 'tailwindcss';
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --app-bg: #111418;
+  --panel-bg: #181c21;
+  --panel-muted: #20262d;
+  --card-bg: #1d2228;
+  --border-color: #303841;
+  --border-strong: #697583;
+  --text-primary: #edf2f7;
+  --text-secondary: #bac4cf;
+  --text-muted: #7f8c9a;
+  --accent: #4b92f0;
+  --accent-soft: rgb(75 146 240 / 18%);
+  --grid-color: rgb(127 140 154 / 14%);
+  --cursor-color: #f59e0b;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --app-bg: #e9edf2;
+  --panel-bg: #f8fafc;
+  --panel-muted: #edf2f7;
+  --card-bg: #ffffff;
+  --border-color: #d3dae3;
+  --border-strong: #7b8794;
+  --text-primary: #17202a;
+  --text-secondary: #465465;
+  --text-muted: #748092;
+  --accent: #2478df;
+  --accent-soft: rgb(36 120 223 / 13%);
+  --grid-color: rgb(70 84 101 / 13%);
+  --cursor-color: #c56700;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-size: 14px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.panel-surface {
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.tool-label,
+.field-label {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.toolbar-button,
+.icon-button,
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.4rem;
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.toolbar-button:hover,
+.icon-button:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.toolbar-button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.icon-button {
+  width: 2rem;
+  padding: 0;
+}
+
+.danger-button {
+  border-color: rgb(239 68 68 / 35%);
+  color: #ef6b72;
+}
+
+.toolbar-input,
+.toolbar-select {
+  min-height: 2rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.35rem;
+  outline: none;
+  background: var(--panel-muted);
+  color: var(--text-primary);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.toolbar-input:focus,
+.toolbar-select:focus {
+  border-color: var(--accent);
+}
+
+.state-json {
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 0.4rem;
+  background: var(--panel-muted);
+  color: var(--text-secondary);
+  padding: 0.6rem;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.scrollbar-thin {
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
