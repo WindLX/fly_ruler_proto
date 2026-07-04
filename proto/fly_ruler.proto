@@ -29,6 +29,24 @@ message DerivedState {
   double eas      = 7;
   double gamma    = 8;
   double chi      = 9;
+  optional double ias  = 10;
+  optional double cas  = 11;
+  optional double mach = 12;
+}
+
+message ControlSurfaceState {
+  optional double aileron_left_rad  = 1;
+  optional double aileron_right_rad = 2;
+  optional double elevator_rad      = 3;
+  optional double rudder_rad        = 4;
+  optional double flaps_left_ratio  = 5;
+  optional double flaps_right_ratio = 6;
+  optional double spoilers_ratio    = 7;
+}
+
+message EngineState {
+  uint32 index = 1;
+  optional double throttle_lever_ratio = 2;
 }
 
 message FieldValue {
@@ -53,6 +71,8 @@ message AircraftState {
   Vector3              angular_velocity = 4;
   DerivedState         derived          = 5;
   repeated CustomField custom_fields    = 6;
+  ControlSurfaceState  control_surfaces = 7;
+  repeated EngineState engines          = 8;
 }
 
 message AircraftSpawnInfo {

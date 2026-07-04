@@ -42,4 +42,48 @@ mod tests {
         assert_eq!(hb.seq_num, 99);
         assert_eq!(hb.client_uuid.unwrap().value, vec![0xab; 16]);
     }
+
+    #[test]
+    fn aircraft_state_new_fields_roundtrip_and_old_payload_defaults() {
+        let state = AircraftState {
+            derived: Some(DerivedState {
+                ias: Some(45.0),
+                cas: Some(46.0),
+                mach: Some(0.14),
+                ..Default::default()
+            }),
+            control_surfaces: Some(ControlSurfaceState {
+                elevator_rad: Some(0.1),
+                spoilers_ratio: Some(0.25),
+                ..Default::default()
+            }),
+            engines: vec![
+                EngineState {
+                    index: 1,
+                    throttle_lever_ratio: Some(0.3),
+                },
+                EngineState {
+                    index: 2,
+                    throttle_lever_ratio: Some(0.7),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let decoded = AircraftState::decode(state.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.derived.unwrap().mach, Some(0.14));
+        assert_eq!(decoded.control_surfaces.unwrap().elevator_rad, Some(0.1));
+        assert_eq!(decoded.engines[1].throttle_lever_ratio, Some(0.7));
+
+        // A legacy AircraftState containing only field 1 remains valid.
+        let legacy_position_only = [
+            0x0a, 0x1b, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x11, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
+            0x40,
+        ];
+        let legacy = AircraftState::decode(legacy_position_only.as_slice()).unwrap();
+        assert_eq!(legacy.position.unwrap().x, 1.0);
+        assert!(legacy.control_surfaces.is_none());
+        assert!(legacy.engines.is_empty());
+    }
 }

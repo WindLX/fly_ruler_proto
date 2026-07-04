@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================================
+  # Core: package source (.crate) for GitHub Release
+  # ============================================================
+  package-core:
+    name: Package core source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package core crate
+        run: cargo package -p fly_ruler_proto_core
+      - name: Upload core source
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-source
+          path: target/package/fly_ruler_proto_core-*.crate
+
+  # ============================================================
+  # Core: publish to crates.io
+  # This job is independent — a failure here does not block the
+  # GitHub Release. Requires CARGO_REGISTRY_TOKEN secret.
+  # ============================================================
+  publish-crates-io:
+    name: Publish core to crates.io
+    needs: package-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish to crates.io
+        run: cargo publish -p fly_ruler_proto_core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # ============================================================
+  # Python: build Linux wheels (x86_64 + aarch64)
+  # ============================================================
+  build-wheels-linux:
+    name: Build Python wheel (Linux ${{ matrix.target }})
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install Python
+        run: uv python install 3.12
+        working-directory: bindings/python
+      - name: Install Python dependencies
+        run: uv sync
+        working-directory: bindings/python
+      - name: Install QEMU (for aarch64 cross-compile)
+        if: matrix.target == 'aarch64'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist
+          sccache: "true"
+          working-directory: bindings/python
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: bindings/python/dist/*.whl
+
+  # ============================================================
+  # Python: build Windows wheel
+  # ============================================================
+  build-wheel-windows:
+    name: Build Python wheel (Windows x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install Python
+        run: uv python install 3.12
+        working-directory: bindings/python
+      - name: Install Python dependencies
+        run: uv sync
+        working-directory: bindings/python
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist
+          sccache: "true"
+          working-directory: bindings/python
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows
+          path: bindings/python/dist/*.whl
+
+  # ============================================================
+  # MSFS: cross-compile bridge (Windows binary from Linux)
+  #
+  # Required: MSFS 2024 SDK cached in .msfs2024-sdk/
+  #
+  # To seed the cache:
+  #   1. Extract the MSI locally:
+  #      msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi \
+  #        --directory .msfs2024-sdk
+  #   2. Upload .msfs2024-sdk as a GitHub Actions cache with key
+  #      "msfs2024-sdk-v1"
+  # ============================================================
+  build-msfs:
+    name: Build MSFS bridge (Windows cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin
+      - name: Restore MSFS SDK from cache
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: .msfs2024-sdk
+          key: msfs2024-sdk-v1
+      - name: Check SDK availability
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::MSFS 2024 SDK cache miss."
+          echo "::error::Please extract the SDK locally and seed the cache."
+          echo "::error::  msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi --directory .msfs2024-sdk"
+          echo "::error::Then upload .msfs2024-sdk as a cache with key 'msfs2024-sdk-v1'"
+          exit 1
+      - name: Set MSFS SDK environment variable
+        run: echo "MSFS2024_SDK=$(pwd)/.msfs2024-sdk/MSFS 2024 SDK" >> $GITHUB_ENV
+      - name: Build MSFS bridge
+        run: cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --release
+      - name: Upload MSFS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: msfs-binary
+          path: |
+            target/x86_64-pc-windows-msvc/release/fly-ruler-msfs-bridge.exe
+            target/x86_64-pc-windows-msvc/release/SimConnect.dll
+
+  # ============================================================
+  # Python: publish wheels to PyPI
+  # Requires GitHub environment "pypi" with Trusted Publishing
+  # enabled (OIDC). See the plan for setup instructions.
+  # ============================================================
+  publish-pypi:
+    name: Publish Python wheels to PyPI
+    needs: [build-wheels-linux, build-wheel-windows]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish to PyPI
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*
+
+  # ============================================================
+  # Create GitHub Release with all build artifacts
+  # ============================================================
+  github-release:
+    name: Create GitHub Release
+    needs: [package-core, build-wheels-linux, build-wheel-windows, build-msfs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          generate_release_notes: true

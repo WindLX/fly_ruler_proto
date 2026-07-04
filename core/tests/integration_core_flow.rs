@@ -39,6 +39,8 @@ fn state(x: f64) -> pb::AircraftState {
         attitude: None,
         angular_velocity: None,
         derived: None,
+        control_surfaces: None,
+        engines: vec![],
         custom_fields: vec![pb::CustomField {
             field_id: "throttle".to_string(),
             value: Some(pb::FieldValue {

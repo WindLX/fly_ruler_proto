@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "bindings/python", "bindings/godot"]
+members = ["core", "bindings/python", "bindings/godot", "bindings/msfs"]
 resolver = "2"
 
 [workspace.package]

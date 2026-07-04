@@ -1,4 +1,6 @@
 /target
+/.sdk-installer/
+/.msfs2024-sdk/
 
 .venv
 .pytest_cache

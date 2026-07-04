@@ -1,0 +1,17 @@
+[package]
+name = "fly_ruler_proto_msfs"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "fly-ruler-msfs-bridge"
+path = "src/main.rs"
+
+[dependencies]
+fly_ruler_proto_core = { path = "../../core" }
+clap = { version = "4.5.60", features = ["derive"] }
+ctrlc = "3.5.2"
+thiserror = "2.0.18"
+tokio.workspace = true
+tracing.workspace = true

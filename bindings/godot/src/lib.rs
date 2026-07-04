@@ -46,8 +46,50 @@ fn derived_to_dict(v: Option<&pb::DerivedState>) -> VarDictionary {
         d.set("eas", value.eas);
         d.set("gamma", value.gamma);
         d.set("chi", value.chi);
+        if let Some(ias) = value.ias {
+            d.set("ias", ias);
+        }
+        if let Some(cas) = value.cas {
+            d.set("cas", cas);
+        }
+        if let Some(mach) = value.mach {
+            d.set("mach", mach);
+        }
     }
     d
+}
+
+fn control_surfaces_to_dict(v: Option<&pb::ControlSurfaceState>) -> VarDictionary {
+    let mut d = VarDictionary::new();
+    if let Some(value) = v {
+        for (name, field) in [
+            ("aileron_left_rad", value.aileron_left_rad),
+            ("aileron_right_rad", value.aileron_right_rad),
+            ("elevator_rad", value.elevator_rad),
+            ("rudder_rad", value.rudder_rad),
+            ("flaps_left_ratio", value.flaps_left_ratio),
+            ("flaps_right_ratio", value.flaps_right_ratio),
+            ("spoilers_ratio", value.spoilers_ratio),
+        ] {
+            if let Some(field) = field {
+                d.set(name, field);
+            }
+        }
+    }
+    d
+}
+
+fn engines_to_array(engines: &[pb::EngineState]) -> Array<VarDictionary> {
+    let mut out = Array::new();
+    for engine in engines {
+        let mut d = VarDictionary::new();
+        d.set("index", engine.index);
+        if let Some(throttle) = engine.throttle_lever_ratio {
+            d.set("throttle_lever_ratio", throttle);
+        }
+        out.push(&d);
+    }
+    out
 }
 
 fn aircraft_state_to_dict(state: &pb::AircraftState) -> VarDictionary {
@@ -60,6 +102,11 @@ fn aircraft_state_to_dict(state: &pb::AircraftState) -> VarDictionary {
         &vector3_to_dict(state.angular_velocity.as_ref()),
     );
     d.set("derived", &derived_to_dict(state.derived.as_ref()));
+    d.set(
+        "control_surfaces",
+        &control_surfaces_to_dict(state.control_surfaces.as_ref()),
+    );
+    d.set("engines", &engines_to_array(&state.engines));
     d
 }
 

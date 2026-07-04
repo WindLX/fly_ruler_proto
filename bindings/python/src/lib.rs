@@ -38,6 +38,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVector3>()?;
     m.add_class::<PyQuaternion>()?;
     m.add_class::<PyDerivedState>()?;
+    m.add_class::<PyControlSurfaceState>()?;
+    m.add_class::<PyEngineState>()?;
     m.add_class::<PyAircraftState>()?;
 
     // Networking client/server

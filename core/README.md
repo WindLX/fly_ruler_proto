@@ -90,6 +90,24 @@ message DerivedState {
   double eas      = 7;  // 当量空速
   double gamma    = 8;  // 航迹倾斜角
   double chi      = 9;  // 航迹方位角
+  optional double ias  = 10; // 指示空速
+  optional double cas  = 11; // 校准空速
+  optional double mach = 12; // 马赫数
+}
+
+message ControlSurfaceState {
+  optional double aileron_left_rad  = 1;
+  optional double aileron_right_rad = 2;
+  optional double elevator_rad      = 3;
+  optional double rudder_rad        = 4;
+  optional double flaps_left_ratio  = 5;
+  optional double flaps_right_ratio = 6;
+  optional double spoilers_ratio    = 7;
+}
+
+message EngineState {
+  uint32 index = 1; // 从 1 开始
+  optional double throttle_lever_ratio = 2;
 }
 
 message AircraftState {
@@ -99,6 +117,8 @@ message AircraftState {
   Vector3              angular_velocity = 4;
   DerivedState         derived          = 5;
   repeated CustomField custom_fields    = 6;
+  ControlSurfaceState  control_surfaces = 7;
+  repeated EngineState engines          = 8;
 }
 ```
 

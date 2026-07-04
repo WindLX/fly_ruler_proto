@@ -24,6 +24,18 @@ test-rs:
 test-py: develop
     cd bindings/python && uv run pytest tests/
 
+# Cross-compile the MSFS 2024 bridge and stage SimConnect.dll beside it
+build-msfs:
+    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc
+
+# Run the MSFS bridge inside the Steam MSFS 2024 Proton prefix
+run-msfs *ARGS:
+    protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe {{ARGS}}
+
+# Run the geodetic MSFS demo sender
+demo-msfs *ARGS:
+    cd bindings/python && uv run python examples/demo_msfs_client.py {{ARGS}}
+
 # Run all static checks
 _check-rs:
     cargo fmt --check

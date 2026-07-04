@@ -2,7 +2,8 @@
 
 ## 1. Scope and Goals
 
-This document is the architecture baseline for `core` and its direct runtime users (`bindings/python`, `bindings/godot`).
+This document is the architecture baseline for `core` and its direct runtime users
+(`bindings/python`, `bindings/godot`, `bindings/msfs`).
 
 v1 priorities:
 
@@ -44,7 +45,7 @@ v1 priorities:
 ## 3. Target Architecture (v1)
 
 ```text
-bindings/python | bindings/godot
+bindings/python | bindings/godot | bindings/msfs
             |
             v
       KernelRuntime API
@@ -137,3 +138,5 @@ Planned improvements:
 
 - Existing bindings should continue using the same high-level kernel/runtime operations.
 - Internal refactor should prefer additive changes (`with_config`, new config types) before removals.
+- The MSFS binding is an out-of-process Windows sidecar. It reuses the UDP
+  kernel under Proton and keeps SimConnect-specific FFI outside `core`.

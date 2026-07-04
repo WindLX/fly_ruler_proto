@@ -73,6 +73,10 @@ Godot provides an embedded server wrapper around `KernelRuntime`. It can start
 and stop the UDP server, inspect sessions, query aircraft/time-series data, and
 perform explicit save/load.
 
+MSFS 2024 provides an out-of-process Windows sidecar that runs under Proton,
+receives the same UDP state through `KernelRuntime`, and writes the selected
+user-aircraft pose and visual control surfaces through SimConnect.
+
 Unity is not implemented in v1. Future Unity integration should reuse the same
 core API through a C ABI, C# binding, or a separate process wrapper if needed.
 

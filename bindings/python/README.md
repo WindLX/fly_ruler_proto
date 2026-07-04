@@ -98,6 +98,9 @@ d = DerivedState(
     eas=48.0,
     gamma=0.1,
     chi=0.2,
+    ias=47.5,
+    cas=47.5,
+    mach=0.15,
 )
 ```
 
@@ -112,11 +115,17 @@ d = DerivedState(
 | `eas` | `float` | 当量空速 |
 | `gamma` | `float` | 航迹倾斜角 |
 | `chi` | `float` | 航迹方位角 |
+| `ias` | `float \| None` | 指示空速 |
+| `cas` | `float \| None` | 校准空速 |
+| `mach` | `float \| None` | 马赫数 |
 
 ### 3.4 `AircraftState`
 
 ```python
-from fly_ruler_proto_python import AircraftState, Vector3, Quaternion, DerivedState
+from fly_ruler_proto_python import (
+    AircraftState, ControlSurfaceState, DerivedState, EngineState,
+    Quaternion, Vector3,
+)
 
 state = AircraftState(
     position=Vector3(100.0, 200.0, -300.0),
@@ -124,6 +133,9 @@ state = AircraftState(
     attitude=Quaternion(1.0, 0.0, 0.0, 0.0),
     angular_velocity=Vector3(0.1, 0.2, 0.3),
     derived=DerivedState(lat=30.0, lon=120.0, altitude=1000.0),
+    control_surfaces=ControlSurfaceState(rudder_rad=0.1),
+    engines=[EngineState(1, throttle_lever_ratio=0.7)],
+    custom_fields={"flyruler.control.rudder_rad": 0.1},
 )
 
 # 悬停/默认状态
@@ -137,6 +149,9 @@ hover = AircraftState.hover()
 | `attitude` | `Quaternion` | 姿态四元数 |
 | `angular_velocity` | `Vector3` | 角速度 |
 | `derived` | `DerivedState \| None` | 派生气动/导航状态 |
+| `control_surfaces` | `ControlSurfaceState \| None` | 标准舵面状态 |
+| `engines` | `list[EngineState]` | 从 1 开始编号的逐发动机状态 |
+| `custom_fields` | `dict[str, float \| int \| bool \| str \| bytes]` | protobuf 扩展字段 |
 
 ### 3.5 辅助函数 `create_aircraft_state`
 
@@ -148,10 +163,15 @@ state = create_aircraft_state(
     velocity=(4.0, 5.0, 6.0),
     attitude=(1.0, 0.1, 0.2, 0.3),
     angular_velocity=(0.4, 0.5, 0.6),
+    derived=DerivedState(lat=30.0, lon=120.0, altitude=1000.0),
+    control_surfaces=ControlSurfaceState(rudder_rad=0.1),
+    engines=[EngineState(1, throttle_lever_ratio=0.7)],
+    custom_fields={"flyruler.control.rudder_rad": 0.1},
 )
 ```
 
-提供元组形式的便捷构造，`derived` 固定为 `None`。
+提供元组形式的便捷构造，并可传入标准空气数据、舵面、逐发动机状态与
+类型化 `custom_fields`。
 
 ## 4. `FlyRulerClient` — 高层客户端
 

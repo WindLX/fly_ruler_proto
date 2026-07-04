@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+CustomFieldValue = float | int | bool | str | bytes
+
 PROTOCOL_VERSION: str
 
 def get_protocol_version() -> str: ...
@@ -58,6 +60,7 @@ class AircraftState:
     attitude: Quaternion
     angular_velocity: Vector3
     derived: Optional[DerivedState]
+    custom_fields: dict[str, CustomFieldValue]
 
     def __init__(
         self,
@@ -66,10 +69,12 @@ class AircraftState:
         attitude: Optional[Quaternion] = None,
         angular_velocity: Optional[Vector3] = None,
         derived: Optional[DerivedState] = None,
+        custom_fields: Optional[dict[str, CustomFieldValue]] = None,
     ) -> None: ...
 
     @staticmethod
     def hover() -> "AircraftState": ...
+    def set_custom_field(self, field_id: str, value: CustomFieldValue) -> None: ...
     def __repr__(self) -> str: ...
 
 class PyClient:

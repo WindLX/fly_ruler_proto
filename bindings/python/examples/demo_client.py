@@ -52,20 +52,38 @@ def build_state(elapsed_s: float, cfg: MotionConfig):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FlyRuler demo simulator client")
-    parser.add_argument("--address", default="127.0.0.1:8080", help="FlyRuler UDP server address")
+    parser.add_argument(
+        "--address", default="127.0.0.1:8080", help="FlyRuler UDP server address"
+    )
     parser.add_argument("--name", default="DemoAircraft", help="Aircraft display name")
     parser.add_argument("--hz", type=float, default=30.0, help="State update frequency")
-    parser.add_argument("--duration", type=float, default=0.0, help="Run duration seconds, 0 means run forever")
-    parser.add_argument("--radius", type=float, default=300.0, help="Circle radius in meters")
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=0.0,
+        help="Run duration seconds, 0 means run forever",
+    )
+    parser.add_argument(
+        "--radius", type=float, default=300.0, help="Circle radius in meters"
+    )
     parser.add_argument("--speed", type=float, default=60.0, help="Speed in m/s")
-    parser.add_argument("--altitude", type=float, default=1200.0, help="Altitude in meters")
-    parser.add_argument("--event-every", type=float, default=5.0, help="Custom event interval seconds, <=0 disables")
+    parser.add_argument(
+        "--altitude", type=float, default=1200.0, help="Altitude in meters"
+    )
+    parser.add_argument(
+        "--event-every",
+        type=float,
+        default=5.0,
+        help="Custom event interval seconds, <=0 disables",
+    )
     parser.add_argument(
         "--toml-config",
         default="[aircraft]\nmodel='demo'\nrole='test_sender'",
         help="TOML config payload sent during spawn",
     )
-    parser.add_argument("--heartbeat", type=float, default=1.0, help="Heartbeat interval in seconds")
+    parser.add_argument(
+        "--heartbeat", type=float, default=1.0, help="Heartbeat interval in seconds"
+    )
     return parser.parse_args()
 
 
@@ -100,7 +118,9 @@ def main() -> int:
         toml_config=args.toml_config,
         heartbeat_interval_secs=args.heartbeat,
     ) as client:
-        print(f"Connected. client_uuid={client.client_uuid} aircraft_uuid={client.aircraft_uuid}")
+        print(
+            f"Connected. client_uuid={client.client_uuid} aircraft_uuid={client.aircraft_uuid}"
+        )
 
         period = 1.0 / args.hz
         start_monotonic = time.monotonic()

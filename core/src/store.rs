@@ -647,6 +647,8 @@ mod tests {
                 z: 0.0,
             }),
             derived: None,
+            control_surfaces: None,
+            engines: vec![],
             custom_fields: vec![],
         }
     }

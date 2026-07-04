@@ -192,7 +192,9 @@ for id in ids:
 | `velocity` | `Dictionary` | `{x: float, y: float, z: float}` |
 | `attitude` | `Dictionary` | `{w: float, x: float, y: float, z: float}` |
 | `angular_velocity` | `Dictionary` | `{x: float, y: float, z: float}` |
-| `derived` | `Dictionary` | `{lat, lon, altitude, alpha, beta, tas, eas, gamma, chi}` |
+| `derived` | `Dictionary` | `{lat, lon, altitude, alpha, beta, tas, eas, gamma, chi, ias?, cas?, mach?}` |
+| `control_surfaces` | `Dictionary` | 可选舵面角度与襟翼/扰流板比例 |
+| `engines` | `Array[Dictionary]` | `{index, throttle_lever_ratio?}` |
 | `timestamp_secs` | `float` | 状态时间戳 |
 
 ```gdscript
@@ -342,7 +344,10 @@ func _exit_tree() -> void:
     "tas": 0.0,
     "eas": 0.0,
     "gamma": 0.0,
-    "chi": 0.0
+    "chi": 0.0,
+    "ias": 0.0,
+    "cas": 0.0,
+    "mach": 0.0
 }
 ```
 
@@ -355,6 +360,8 @@ func _exit_tree() -> void:
     "attitude": {"w": ..., "x": ..., "y": ..., "z": ...},
     "angular_velocity": {"x": ..., "y": ..., "z": ...},
     "derived": {"lat": ..., ...},
+    "control_surfaces": {"elevator_rad": ..., ...},
+    "engines": [{"index": 1, "throttle_lever_ratio": 0.7}],
     "timestamp_secs": 123.456
 }
 ```

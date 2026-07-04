@@ -10,6 +10,8 @@ from fly_ruler_proto_python._core import (
     Vector3,
     Quaternion,
     DerivedState,
+    ControlSurfaceState,
+    EngineState,
     AircraftState,
 )
 
@@ -23,6 +25,8 @@ __all__ = [
     "Vector3",
     "Quaternion",
     "DerivedState",
+    "ControlSurfaceState",
+    "EngineState",
     "AircraftState",
     # High-level API
     "FlyRulerClient",

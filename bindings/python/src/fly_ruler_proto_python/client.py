@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Mapping
 
 from fly_ruler_proto_python._core import (
     AircraftState,
-    PROTOCOL_VERSION,
+    ControlSurfaceState,
+    DerivedState,
+    EngineState,
     PyClient,
     Quaternion,
     Vector3,
@@ -18,6 +20,10 @@ def create_aircraft_state(
     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
     attitude: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
     angular_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    derived: DerivedState | None = None,
+    control_surfaces: ControlSurfaceState | None = None,
+    engines: list[EngineState] | None = None,
+    custom_fields: Mapping[str, float | int | bool | str | bytes] | None = None,
 ) -> AircraftState:
     """Create a default AircraftState for convenient scripting."""
     return AircraftState(
@@ -25,7 +31,10 @@ def create_aircraft_state(
         velocity=Vector3(*velocity),
         attitude=Quaternion(*attitude),
         angular_velocity=Vector3(*angular_velocity),
-        derived=None,
+        derived=derived,
+        control_surfaces=control_surfaces,
+        engines=engines,
+        custom_fields=custom_fields,
     )
 
 
@@ -46,7 +55,7 @@ class FlyRulerClient:
         self,
         address: str,
         aircraft_name: str,
-        initial_state: Optional[AircraftState] = None,
+        initial_state: AircraftState | None = None,
         toml_config: str = "",
         heartbeat_interval_secs: float = 1.0,
     ) -> None:
@@ -70,18 +79,20 @@ class FlyRulerClient:
     def update_state(
         self,
         state: AircraftState,
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> None:
         self._inner.update_state(state, timestamp)
 
     def create_event(
         self,
         event_name: str,
-        timestamp: Optional[float] = None,
+        timestamp: float | None = None,
     ) -> None:
         self._inner.create_event(event_name, timestamp)
 
-    def despawn(self, reason: Optional[str] = None, timestamp: Optional[float] = None) -> None:
+    def despawn(
+        self, reason: str | None = None, timestamp: float | None = None
+    ) -> None:
         self._inner.despawn(reason, timestamp)
 
     def close(self) -> None:

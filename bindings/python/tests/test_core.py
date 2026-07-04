@@ -5,7 +5,9 @@ from __future__ import annotations
 import fly_ruler_proto_python.client as client_module
 from fly_ruler_proto_python import (
     AircraftState,
+    ControlSurfaceState,
     DerivedState,
+    EngineState,
     FlyRulerClient,
     PROTOCOL_VERSION,
     Quaternion,
@@ -54,6 +56,9 @@ class TestDerivedState:
             eas=48.0,
             gamma=0.1,
             chi=0.2,
+            ias=47.0,
+            cas=47.5,
+            mach=0.15,
         )
         assert d.lat == 37.7749
         assert d.lon == -122.4194
@@ -64,6 +69,9 @@ class TestDerivedState:
         assert d.eas == 48.0
         assert d.gamma == 0.1
         assert d.chi == 0.2
+        assert d.ias == 47.0
+        assert d.cas == 47.5
+        assert d.mach == 0.15
 
 
 class TestAircraftState:
@@ -96,6 +104,42 @@ class TestAircraftState:
         assert state.derived is not None
         assert state.derived.tas == 250.0
 
+    def test_custom_fields_round_trip_supported_types(self):
+        state = AircraftState(
+            custom_fields={
+                "float": 1.5,
+                "int": 3,
+                "bool": True,
+                "string": "ok",
+                "bytes": b"data",
+            }
+        )
+        assert state.custom_fields == {
+            "float": 1.5,
+            "int": 3,
+            "bool": True,
+            "string": "ok",
+            "bytes": b"data",
+        }
+        state.set_custom_field("float", 2.5)
+        assert state.custom_fields["float"] == 2.5
+
+    def test_standard_controls_and_engines(self):
+        state = AircraftState(
+            control_surfaces=ControlSurfaceState(
+                elevator_rad=0.1,
+                flaps_left_ratio=0.5,
+            ),
+            engines=[
+                EngineState(1, throttle_lever_ratio=0.25),
+                EngineState(2, throttle_lever_ratio=0.75),
+            ],
+        )
+        assert state.control_surfaces.elevator_rad == 0.1
+        assert state.control_surfaces.flaps_left_ratio == 0.5
+        assert [engine.index for engine in state.engines] == [1, 2]
+        assert state.engines[1].throttle_lever_ratio == 0.75
+
 
 class TestHelpers:
     def test_create_aircraft_state_helper(self):
@@ -104,11 +148,19 @@ class TestHelpers:
             velocity=(4.0, 5.0, 6.0),
             attitude=(1.0, 0.1, 0.2, 0.3),
             angular_velocity=(0.4, 0.5, 0.6),
+            derived=DerivedState(31.2, 121.5, 1000.0),
+            control_surfaces=ControlSurfaceState(rudder_rad=0.1),
+            engines=[EngineState(1, 0.4)],
+            custom_fields={"flyruler.control.rudder_rad": 0.1},
         )
         assert state.position.x == 1.0
         assert state.velocity.y == 5.0
         assert state.attitude.z == 0.3
         assert state.angular_velocity.x == 0.4
+        assert state.derived is not None
+        assert state.control_surfaces.rudder_rad == 0.1
+        assert state.engines[0].throttle_lever_ratio == 0.4
+        assert state.custom_fields["flyruler.control.rudder_rad"] == 0.1
 
 
 class TestModuleApi:
