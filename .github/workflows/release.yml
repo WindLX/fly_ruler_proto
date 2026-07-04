@@ -61,8 +61,8 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
         working-directory: bindings/python
-      - name: Install Python dependencies
-        run: uv sync
+      - name: Validate Python lockfile
+        run: uv sync --locked --no-dev --no-install-project
         working-directory: bindings/python
       - name: Install QEMU (for aarch64 cross-compile)
         if: matrix.target == 'aarch64'
@@ -95,8 +95,8 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
         working-directory: bindings/python
-      - name: Install Python dependencies
-        run: uv sync
+      - name: Validate Python lockfile
+        run: uv sync --locked --no-dev --no-install-project
         working-directory: bindings/python
       - name: Build wheel
         uses: PyO3/maturin-action@v1

@@ -27,5 +27,5 @@ build-backend = "maturin"
 [dependency-groups]
 dev = [
     "pytest>=9.1.0",
-    "patchelf>=0.17",
+    "patchelf>=0.17; sys_platform == 'linux'",
 ]

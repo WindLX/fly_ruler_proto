@@ -62,7 +62,8 @@ fly_ruler_proto/
 
 ## 3. Protobuf 协议
 
-Schema 源文件：`proto/fly_ruler.proto`。
+Schema 源文件：`proto/fly_ruler.proto`。`core/proto/fly_ruler.proto` 是随
+crate 发布的镜像；`build.rs` 在工作区构建时会校验两者完全一致。
 
 ### 3.1 基础几何/状态消息
 
@@ -231,7 +232,10 @@ pub const PROTOCOL_VERSION: &str = "1.0.0";
 
 ### 4.2 `pb.rs` + `build.rs` — 代码生成
 
-`core/build.rs` 在编译期调用 `prost_build` 从 `../proto/fly_ruler.proto` 生成 Rust 结构体，并在 `pb.rs` 中通过 `include!` 嵌入：
+`core/build.rs` 在工作区中从 `../proto/fly_ruler.proto` 生成 Rust 结构体；
+从 crates.io 安装时则使用 crate 内的 `proto/fly_ruler.proto` 镜像。工作区
+构建会先校验两个文件内容完全一致。生成结果在 `pb.rs` 中通过 `include!`
+嵌入：
 
 ```rust
 include!(concat!(env!("OUT_DIR"), "/flyruler.rs"));
@@ -650,5 +654,6 @@ cargo test -p fly_ruler_proto_core
 
 - Python 绑定：`../bindings/python/README.md`
 - Godot 绑定：`../bindings/godot/README.md`
-- 项目总览：`../CLAUDE.md`
+- 项目总览：`../AGENT.md`
 - Protobuf Schema：`../proto/fly_ruler.proto`
+- Crate 内 Schema 镜像：`proto/fly_ruler.proto`
