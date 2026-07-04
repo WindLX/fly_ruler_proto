@@ -39,8 +39,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Publish to crates.io
-        run: cargo publish -p fly_ruler_proto_core
+      - name: Publish to crates.io if version is new
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(
+            python3 -c \
+              'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])'
+          )"
+          endpoint="https://crates.io/api/v1/crates/fly_ruler_proto_core/${version}"
+          status="$(
+            curl --silent --show-error \
+              --retry 3 \
+              --user-agent "fly_ruler_proto-release-ci/1.0 (https://github.com/WindLX/fly_ruler_proto)" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "${endpoint}"
+          )"
+
+          case "${status}" in
+            200)
+              echo "fly_ruler_proto_core ${version} already exists on crates.io; skipping."
+              ;;
+            404)
+              cargo publish -p fly_ruler_proto_core
+              ;;
+            *)
+              echo "::error::Unexpected crates.io API response: HTTP ${status}"
+              exit 1
+              ;;
+          esac
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
