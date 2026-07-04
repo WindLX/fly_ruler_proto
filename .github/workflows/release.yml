@@ -162,7 +162,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y llvm-18
           sudo ln -sf /usr/bin/llvm-lib-18 /usr/local/bin/llvm-lib
-          command -v clang-cl
           command -v llvm-lib
       - name: Install Windows Rust target
         run: rustup target add x86_64-pc-windows-msvc
