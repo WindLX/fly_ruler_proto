@@ -162,33 +162,35 @@ pub trait Simulator {
 
 /// Return whether an aircraft's latest lifecycle event leaves it spawned.
 pub fn is_spawned(store: &TimeSeriesStore, id: &str) -> bool {
-    let id = id.to_owned();
-    store
-        .get_events_range(&id, f64::NEG_INFINITY, f64::INFINITY)
-        .and_then(|events| {
-            events
-                .into_iter()
-                .rev()
-                .find_map(|entry| match entry.event {
-                    Event::Spawn(_) => Some(true),
-                    Event::Despawn(_) => Some(false),
-                    Event::Custom(_) => None,
-                })
-        })
-        .unwrap_or(false)
+    is_spawned_at(store, id, f64::INFINITY)
+}
+
+/// Return whether an aircraft is spawned at the supplied global cursor.
+pub fn is_spawned_at(store: &TimeSeriesStore, id: &str, timestamp_secs: f64) -> bool {
+    store.is_spawned_at(&id.to_owned(), timestamp_secs)
 }
 
 /// Select a requested active aircraft or the earliest active spawn.
 pub fn select_aircraft(store: &TimeSeriesStore, requested: Option<&str>) -> Option<String> {
+    select_aircraft_at(store, requested, f64::INFINITY)
+}
+
+/// Select an active aircraft at a global replay cursor.
+pub fn select_aircraft_at(
+    store: &TimeSeriesStore,
+    requested: Option<&str>,
+    timestamp_secs: f64,
+) -> Option<String> {
     if let Some(id) = requested {
-        return is_spawned(store, id).then(|| id.to_owned());
+        return is_spawned_at(store, id, timestamp_secs).then(|| id.to_owned());
     }
 
     store
         .get_aircraft_ids()
         .into_iter()
-        .filter(|id| is_spawned(store, id))
+        .filter(|id| is_spawned_at(store, id, timestamp_secs))
         .filter_map(|id| first_spawn_timestamp(store, &id).map(|timestamp| (timestamp, id)))
+        .filter(|(spawn_timestamp, _)| *spawn_timestamp <= timestamp_secs)
         .min_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -756,6 +758,29 @@ mod tests {
         );
         assert!(!is_spawned(&store, "first"));
         assert_eq!(select_aircraft(&store, None).as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn replay_selection_respects_spawn_and_despawn_times() {
+        let store = TimeSeriesStore::new();
+        spawn(&store, "first", 1.0);
+        spawn(&store, "second", 3.0);
+        store.append_event(
+            "first".to_owned(),
+            4.0,
+            Event::Despawn(pb::DespawnInfo::default()),
+        );
+
+        assert_eq!(select_aircraft_at(&store, None, 0.5), None);
+        assert_eq!(
+            select_aircraft_at(&store, None, 2.0).as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            select_aircraft_at(&store, None, 5.0).as_deref(),
+            Some("second")
+        );
+        assert_eq!(select_aircraft_at(&store, Some("first"), 5.0), None);
     }
 
     fn spawn(store: &TimeSeriesStore, id: &str, timestamp: f64) {

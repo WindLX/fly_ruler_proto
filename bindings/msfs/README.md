@@ -68,7 +68,15 @@ Useful options:
 --aircraft-id <32-character FlyRuler UUID>
 --tick-hz 240
 --stale-timeout-ms 500
+--http-listen 127.0.0.1:8081
+--data-root ./sessions
+--ws-hz 30
+--cors-origin http://localhost:5173
+--no-http
 ```
+
+Unless `--no-http` is supplied, the bridge embeds the same management service as `fly-ruler-server`. REST playback commands immediately affect SimConnect:
+Live follows the newest sample, paused replay writes a seek exactly once, and playing replay advances using previous-value hold. A seek, load, clear, or other playback revision forces an explicit SimConnect refresh even when the selected sample has the same timestamp.
 
 ## State contract
 
@@ -82,14 +90,9 @@ Useful options:
   `0..=1`.
 - `engines`: engine indices `1..=4` with throttle lever ratios in `0..=1`.
 
-The bridge writes `AIRSPEED TRUE RAW`, reconstructed MSFS body-axis velocity,
-body angular rates, standard control-surface SimVars, and indexed engine
-throttles. MSFS derives IAS, Mach, angle of attack, and sideslip for its native
-instruments. `derived.ias/cas/mach` remain protocol telemetry and are not
-written directly.
+The bridge writes `AIRSPEED TRUE RAW`, reconstructed MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed engine throttles. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments. `derived.ias/cas/mach` remain protocol telemetry and are not written directly.
 
-For compatibility with older clients, these optional custom fields are used
-only when the corresponding `control_surfaces` field is absent:
+For compatibility with older clients, these optional custom fields are used only when the corresponding `control_surfaces` field is absent:
 
 ```text
 flyruler.control.aileron_left_rad
@@ -101,6 +104,9 @@ flyruler.control.flaps_right_ratio
 flyruler.control.spoilers_ratio
 ```
 
-Ratios outside `0..=1`, engine indices outside `1..=4`, non-numeric values, and
-non-finite values are ignored independently without dropping the frame.
-Some complex third-party aircraft may override these SimVars; use a stock aircraft for the first integration test.
+Ratios outside `0..=1`, engine indices outside `1..=4`, non-numeric values, and non-finite values are ignored independently without dropping the frame. Some complex third-party aircraft may override these SimVars; use a stock aircraft for the first integration test.
+
+# TODO
+
+- [ ] 引入 tracer log 和 python 还有 core 保持一致
+- [ ] 从 TOML 配置文件传入参数

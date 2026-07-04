@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "bindings/python", "bindings/godot", "bindings/msfs"]
+members = ["core", "server", "bindings/python", "bindings/godot", "bindings/msfs"]
 resolver = "2"
 
 [workspace.package]
@@ -11,7 +11,7 @@ license = "MIT"
 repository = "https://github.com/WindLX/fly_ruler_proto"
 
 [workspace.dependencies]
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync", "signal"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

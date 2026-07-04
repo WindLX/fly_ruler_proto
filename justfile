@@ -36,6 +36,10 @@ run-msfs *ARGS:
 demo-msfs *ARGS:
     cd bindings/python && uv run python examples/demo_msfs_client.py {{ARGS}}
 
+# Run the standalone UDP + HTTP/WebSocket management daemon
+run-server *ARGS:
+    cargo run -p fly_ruler_proto_server -- {{ARGS}}
+
 # Run all static checks
 _check-rs:
     cargo fmt --check

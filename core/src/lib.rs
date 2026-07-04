@@ -12,8 +12,12 @@ pub mod config;
 pub mod kernel;
 /// Tracing subscriber initialization.
 pub mod logging;
+/// HTTP/WebSocket management API.
+pub mod management;
 /// Generated protobuf types.
 pub mod pb;
+/// Shared live/replay timeline controller.
+pub mod playback;
 /// Time-series storage and persistence.
 pub mod store;
 /// UDP transport runtime.
@@ -24,11 +28,21 @@ pub(crate) mod utils;
 pub const PROTOCOL_VERSION: &str = "1.0.0";
 
 // Re-export commonly used types
-pub use config::{LoggingConfig, RuntimeConfig, StoreConfig, TransportConfig};
+pub use config::{
+    LoggingConfig, ManagementConfig, ReplayConfig, RuntimeConfig, StoreConfig, TransportConfig,
+};
 pub use kernel::{KernelRuntime, RuntimeError};
 pub use logging::init_logging;
-pub use store::{
-    AircraftConfig, AircraftId, AircraftTimeSeries, Event, StoreError, TimeSeriesStore,
-    TimestampedEvent, TimestampedState,
+pub use management::{
+    IngestionGate, ManagementError, ManagementServerRuntime, OperationRecord, OperationState,
 };
-pub use transport::{AircraftClient, Client, Server, ServerRuntime, Session, TransportError};
+pub use playback::{
+    PlaybackController, PlaybackError, PlaybackMode, PlaybackSnapshot, ResolvedState,
+};
+pub use store::{
+    AircraftConfig, AircraftId, AircraftSummary, AircraftTimeSeries, Event, StoreError, StorePage,
+    TimeSeriesStore, TimestampedEvent, TimestampedState,
+};
+pub use transport::{
+    AircraftClient, Client, Server, ServerRuntime, Session, SessionHandle, TransportError,
+};

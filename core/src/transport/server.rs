@@ -86,6 +86,19 @@ struct SessionState {
     by_client_uuid: Arc<Mutex<HashMap<String, SocketAddr>>>,
 }
 
+/// Cloneable read-only handle to active UDP sessions.
+#[derive(Clone)]
+pub struct SessionHandle {
+    state: SessionState,
+}
+
+impl SessionHandle {
+    /// Return the currently active sessions.
+    pub async fn active_sessions(&self) -> Vec<Session> {
+        self.state.list().await
+    }
+}
+
 impl SessionState {
     fn new() -> Self {
         Self {
@@ -369,6 +382,13 @@ impl ServerRuntime {
             stop_token,
             recv_handle: Some(recv_handle),
         })
+    }
+
+    /// Return a cloneable read-only session handle.
+    pub fn session_handle(&self) -> SessionHandle {
+        SessionHandle {
+            state: self.server.sessions.clone(),
+        }
     }
 
     /// Stop the server runtime and close the socket.

@@ -19,7 +19,9 @@ v1 priorities:
 - Wire payload: protobuf (`prost`) message.
 - Runtime transport: UDP (`tokio::net::UdpSocket`).
 - Session model: app-layer handshake/heartbeat with `client_uuid`.
-- Persistence: explicit `save_to_disk` / `load_from_disk` using `meta.json` + parquet.
+- Persistence: transactional save/load using `meta.json` + parquet.
+- Control plane: loopback-only Axum HTTP and read-only WebSocket snapshots.
+- Playback: one global Live/Replay timeline using previous-value hold.
 - Delivery: high-frequency state updates are best effort; no state ACK/retry in v1.
 
 ### 2.2 Core Modules
@@ -27,6 +29,8 @@ v1 priorities:
 - `pb.rs`: generated protobuf module re-export.
 - `transport.rs`: UDP client/server + session bookkeeping.
 - `store.rs`: in-memory time-series storage and persistence.
+- `playback.rs`: shared Live/Replay cursor, speed, and revision state.
+- `management.rs`: REST/WebSocket DTOs and asynchronous persistence operations.
 - `kernel.rs`: orchestration runtime (recv loop, ACK, ingestion, lifecycle).
 - `logging.rs`: tracing subscriber initialization.
 - `config.rs`: runtime configuration (transport/store/logging).
@@ -45,7 +49,7 @@ v1 priorities:
 ## 3. Target Architecture (v1)
 
 ```text
-bindings/python | bindings/godot | bindings/msfs
+bindings/python | bindings/godot | bindings/msfs | fly-ruler-server
             |
             v
       KernelRuntime API
@@ -56,6 +60,10 @@ bindings/python | bindings/godot | bindings/msfs
             |
             +--> Store (state/event + persistence)
             |
+            +--> PlaybackController (Live/Replay global cursor)
+            |
+            +--> Management Server (HTTP + read-only WebSocket)
+            |
             +--> Observability (structured tracing)
 ```
 
@@ -64,7 +72,9 @@ Design rules:
 - `KernelRuntime` is the single orchestration entry.
 - Transport focuses on message I/O and session primitives.
 - ACK/session policy is fixed: handshake and heartbeat ACK; state updates do not.
-- Store remains explicit and deterministic: no hidden background autosave and no replay task.
+- Store remains explicit and deterministic: no hidden autosave or interpolation.
+- UDP ingestion continues during replay; save/load/clear use short maintenance gates.
+- Management file access is restricted to validated names below a configured data root.
 - TOML configs, custom fields, and custom events are persisted as data, without schema validation.
 
 ## 4. Configuration Model
@@ -74,6 +84,8 @@ Configuration is explicit via strong Rust types.
 - `RuntimeConfig`
   - `transport: TransportConfig`
   - `store: StoreConfig` (currently empty placeholder)
+  - `management: ManagementConfig`
+  - `replay: ReplayConfig`
   - `logging: LoggingConfig`
 
 Planned extension points:
@@ -117,8 +129,8 @@ Planned improvements:
 
 ### Phase 3: Reliability and Lifecycle
 
-- Add graceful shutdown path instead of pure abort.
-- Add bounded ingestion path for backpressure.
+- Gracefully stop UDP, HTTP, WebSocket, and persistence coordination.
+- Preserve a consistent store snapshot with a short ingestion maintenance gate.
 
 ### Phase 4: Test and Docs Hardening
 
@@ -130,9 +142,8 @@ Planned improvements:
 - No protocol schema breaking changes.
 - No immediate switch to a different primary transport.
 - No hidden autosave behavior in core runtime.
-- No kernel-level replay, interpolation, playback speed, render timing, or UI/model binding logic.
+- No interpolation, reverse playback, looping, authentication, or Web UI.
 - No schema validation for `toml_config` or `custom_fields` in v1.
-- No standalone daemon process in v1.
 
 ## 8. Compatibility Notes
 

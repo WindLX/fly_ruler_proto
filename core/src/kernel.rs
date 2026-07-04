@@ -8,12 +8,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::RuntimeConfig;
 use crate::logging::init_logging;
+use crate::management::{IngestionGate, ManagementError, ManagementServerRuntime};
+use crate::playback::PlaybackController;
 use crate::store::{StoreError, TimeSeriesStore};
-use crate::transport::{ServerRuntime, Session, TransportError};
+use crate::transport::{ServerRuntime, Session, SessionHandle, TransportError};
 
 /// Errors that can occur when using the kernel runtime.
 #[derive(Debug, Error)]
@@ -25,6 +28,10 @@ pub enum RuntimeError {
     /// An error originating from the store layer.
     #[error("store error: {0}")]
     Store(#[from] StoreError),
+
+    /// An error originating from the HTTP/WebSocket management layer.
+    #[error("management error: {0}")]
+    Management(#[from] ManagementError),
 }
 
 /// Orchestrates a UDP server runtime and a shared time-series store.
@@ -34,7 +41,11 @@ pub enum RuntimeError {
 pub struct KernelRuntime {
     store: Arc<TimeSeriesStore>,
     config: RuntimeConfig,
+    playback: Arc<PlaybackController>,
+    ingestion: Arc<IngestionGate>,
+    sessions: Arc<RwLock<Option<SessionHandle>>>,
     udp_runtime: Option<ServerRuntime>,
+    management_runtime: Option<ManagementServerRuntime>,
 }
 
 impl KernelRuntime {
@@ -47,10 +58,18 @@ impl KernelRuntime {
     pub fn with_config(store: Arc<TimeSeriesStore>, config: RuntimeConfig) -> Self {
         init_logging(&config.logging);
         info!(target: "fly_ruler_proto_core.runtime", "kernel runtime initialized");
+        let playback = Arc::new(PlaybackController::new(
+            Arc::clone(&store),
+            config.replay.clone(),
+        ));
         Self {
             store,
             config,
+            playback,
+            ingestion: Arc::new(IngestionGate::new()),
+            sessions: Arc::new(RwLock::new(None)),
             udp_runtime: None,
+            management_runtime: None,
         }
     }
 
@@ -64,6 +83,16 @@ impl KernelRuntime {
         Arc::clone(&self.store)
     }
 
+    /// Return the shared live/replay timeline controller.
+    pub fn playback(&self) -> Arc<PlaybackController> {
+        Arc::clone(&self.playback)
+    }
+
+    /// Return the ingestion gate and maintenance counters.
+    pub fn ingestion(&self) -> Arc<IngestionGate> {
+        Arc::clone(&self.ingestion)
+    }
+
     /// Start the UDP server runtime on the given address.
     ///
     /// If a server is already running, it is stopped and replaced.
@@ -74,12 +103,16 @@ impl KernelRuntime {
 
         info!(target: "fly_ruler_proto_core.runtime", addr = addr, "starting UDP server runtime");
         let store = Arc::clone(&self.store);
+        let ingestion = Arc::clone(&self.ingestion);
         let store_config = self.config.store.clone();
         let runtime = ServerRuntime::start(addr, &self.config.transport, move |msg, _from| {
-            store.append_message_with_config(msg, &store_config);
+            ingestion.with_ingestion(|| {
+                store.append_message_with_config(msg, &store_config);
+            });
         })
         .await?;
 
+        *self.sessions.write().await = Some(runtime.session_handle());
         self.udp_runtime = Some(runtime);
         info!(target: "fly_ruler_proto_core.runtime", addr = addr, "UDP server runtime started");
         Ok(())
@@ -94,6 +127,46 @@ impl KernelRuntime {
                 warn!(target: "fly_ruler_proto_core.runtime", error = %e, "error stopping UDP server runtime");
             }
         }
+        *self.sessions.write().await = None;
+    }
+
+    /// Start the HTTP/WebSocket management server.
+    ///
+    /// If a management server is already running, it is stopped and replaced.
+    pub async fn start_management_server(&mut self, addr: &str) -> Result<(), RuntimeError> {
+        if self.management_runtime.is_some() {
+            self.stop_management_server().await;
+        }
+        let runtime = ManagementServerRuntime::start(
+            addr,
+            self.config.management.clone(),
+            Arc::clone(&self.store),
+            Arc::clone(&self.playback),
+            Arc::clone(&self.ingestion),
+            Arc::clone(&self.sessions),
+        )
+        .await?;
+        self.management_runtime = Some(runtime);
+        Ok(())
+    }
+
+    /// Stop the HTTP/WebSocket management server, if one is running.
+    pub async fn stop_management_server(&mut self) {
+        if let Some(mut runtime) = self.management_runtime.take() {
+            runtime.stop().await;
+        }
+    }
+
+    /// Return the local socket address of the management server.
+    pub fn management_local_addr(&self) -> Result<SocketAddr, RuntimeError> {
+        self.management_runtime
+            .as_ref()
+            .map(ManagementServerRuntime::local_addr)
+            .ok_or_else(|| {
+                RuntimeError::Management(ManagementError::InvalidConfig(
+                    "management server is not running".to_string(),
+                ))
+            })
     }
 
     /// Return the list of currently active sessions.
@@ -119,20 +192,29 @@ impl KernelRuntime {
     /// Persist the current in-memory session to disk.
     pub fn save_session(&self, path: &Path) -> Result<(), RuntimeError> {
         info!(target: "fly_ruler_proto_core.runtime", path = %path.display(), "saving runtime session");
-        self.store.save_to_disk(path)?;
+        let snapshot = self.ingestion.with_paused(|| self.store.snapshot_clone());
+        snapshot.save_to_disk(path)?;
         Ok(())
     }
 
     /// Load a session snapshot from disk, replacing current in-memory contents.
     pub fn load_session(&self, path: &Path) -> Result<(), RuntimeError> {
         info!(target: "fly_ruler_proto_core.runtime", path = %path.display(), "loading runtime session");
-        self.store.load_from_disk(path)?;
+        let loaded = TimeSeriesStore::new();
+        loaded.load_from_disk(path)?;
+        self.ingestion.with_paused(|| {
+            self.store.replace_from(&loaded);
+            self.playback.reset_after_load();
+        });
         Ok(())
     }
 
     /// Clear all in-memory session data.
     pub fn clear_session(&self) {
-        self.store.clear();
+        self.ingestion.with_paused(|| {
+            self.store.clear();
+            self.playback.reset_empty();
+        });
     }
 }
 

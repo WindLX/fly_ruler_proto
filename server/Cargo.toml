@@ -1,0 +1,17 @@
+[package]
+name = "fly_ruler_proto_server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "fly-ruler-server"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.60", features = ["derive"] }
+fly_ruler_proto_core = { path = "../core" }
+tokio.workspace = true

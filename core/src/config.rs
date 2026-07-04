@@ -3,6 +3,8 @@
 //! This module centralizes configuration knobs used by kernel orchestration,
 //! transport/session behavior and store ingestion behavior.
 
+use std::path::PathBuf;
+
 /// Transport/session-related runtime options.
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
@@ -27,6 +29,57 @@ impl Default for TransportConfig {
 /// will be added here without breaking the API.
 #[derive(Debug, Clone, Default)]
 pub struct StoreConfig;
+
+/// HTTP/WebSocket management server options.
+#[derive(Debug, Clone)]
+pub struct ManagementConfig {
+    /// Directory containing named persisted sessions.
+    pub data_root: PathBuf,
+    /// Aggregate WebSocket snapshot frequency.
+    pub websocket_hz: f64,
+    /// Browser origins allowed to access the localhost API.
+    pub cors_origins: Vec<String>,
+}
+
+impl Default for ManagementConfig {
+    fn default() -> Self {
+        Self {
+            data_root: PathBuf::from("sessions"),
+            websocket_hz: 30.0,
+            cors_origins: vec![
+                "http://localhost:3000".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+                "http://localhost:5173".to_string(),
+                "http://127.0.0.1:5173".to_string(),
+                "http://localhost:8000".to_string(),
+                "http://127.0.0.1:8000".to_string(),
+                "http://localhost:8080".to_string(),
+                "http://127.0.0.1:8080".to_string(),
+            ],
+        }
+    }
+}
+
+/// Global playback controller options.
+#[derive(Debug, Clone)]
+pub struct ReplayConfig {
+    /// Initial playback speed.
+    pub default_speed: f64,
+    /// Minimum accepted forward playback speed.
+    pub min_speed: f64,
+    /// Maximum accepted forward playback speed.
+    pub max_speed: f64,
+}
+
+impl Default for ReplayConfig {
+    fn default() -> Self {
+        Self {
+            default_speed: 1.0,
+            min_speed: 0.1,
+            max_speed: 16.0,
+        }
+    }
+}
 
 /// Logging-related runtime options.
 #[derive(Debug, Clone)]
@@ -53,6 +106,10 @@ pub struct RuntimeConfig {
     pub transport: TransportConfig,
     /// Store ingestion configuration.
     pub store: StoreConfig,
+    /// HTTP/WebSocket management server configuration.
+    pub management: ManagementConfig,
+    /// Playback state machine configuration.
+    pub replay: ReplayConfig,
     /// Logging configuration.
     pub logging: LoggingConfig,
 }

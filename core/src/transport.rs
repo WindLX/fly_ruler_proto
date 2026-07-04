@@ -12,7 +12,7 @@ pub mod client;
 pub mod server;
 
 pub use client::{AircraftClient, Client};
-pub use server::{Server, ServerRuntime, Session};
+pub use server::{Server, ServerRuntime, Session, SessionHandle};
 
 /// Transport errors.
 #[derive(Debug, Error)]

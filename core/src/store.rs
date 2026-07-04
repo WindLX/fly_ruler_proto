@@ -8,7 +8,7 @@
 use std::fs;
 use std::fs::File;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use arrow::array::{Array, BinaryArray, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -78,10 +78,38 @@ pub struct AircraftTimeSeries {
     pub config: Option<AircraftConfig>,
 }
 
+/// Summary metadata for one aircraft time series.
+#[derive(Debug, Clone)]
+pub struct AircraftSummary {
+    /// Aircraft identifier.
+    pub id: AircraftId,
+    /// Spawn configuration, if available.
+    pub config: Option<AircraftConfig>,
+    /// First and last state timestamps.
+    pub time_range: Option<(f64, f64)>,
+    /// Number of stored states.
+    pub state_count: usize,
+    /// Number of stored lifecycle/custom events.
+    pub event_count: usize,
+}
+
+/// One page of a bounded time-range query.
+#[derive(Debug, Clone)]
+pub struct StorePage<T> {
+    /// Page items.
+    pub items: Vec<T>,
+    /// Total matching items before pagination.
+    pub total: usize,
+    /// Requested offset.
+    pub offset: usize,
+    /// Requested limit.
+    pub limit: usize,
+}
+
 /// In-memory time-series store for aircraft states and events.
 #[derive(Debug, Default)]
 pub struct TimeSeriesStore {
-    data: DashMap<AircraftId, AircraftTimeSeries>,
+    data: RwLock<DashMap<AircraftId, AircraftTimeSeries>>,
 }
 
 /// Errors that can occur when persisting or loading store data.
@@ -132,7 +160,7 @@ impl TimeSeriesStore {
     /// Create a new empty store.
     pub fn new() -> Self {
         Self {
-            data: DashMap::new(),
+            data: RwLock::new(DashMap::new()),
         }
     }
 
@@ -140,7 +168,8 @@ impl TimeSeriesStore {
     ///
     /// States are kept sorted by timestamp.
     pub fn append_state(&self, id: AircraftId, timestamp: f64, state: pb::AircraftState) {
-        let mut series = self.data.entry(id).or_default();
+        let data = read_unpoisoned(&self.data);
+        let mut series = data.entry(id).or_default();
         if series
             .states
             .last()
@@ -155,8 +184,7 @@ impl TimeSeriesStore {
 
         let insert_at = series
             .states
-            .binary_search_by(|s| s.timestamp_secs.total_cmp(&timestamp))
-            .unwrap_or_else(|idx| idx);
+            .partition_point(|state| state.timestamp_secs <= timestamp);
         series.states.insert(
             insert_at,
             TimestampedState {
@@ -171,7 +199,8 @@ impl TimeSeriesStore {
     /// Events are kept sorted by timestamp. A `Spawn` event sets the aircraft
     /// configuration.
     pub fn append_event(&self, id: AircraftId, timestamp: f64, event: Event) {
-        let mut series = self.data.entry(id).or_default();
+        let data = read_unpoisoned(&self.data);
+        let mut series = data.entry(id).or_default();
         if let Event::Spawn(spawn) = &event {
             series.config = Some(AircraftConfig {
                 name: spawn.name.clone(),
@@ -193,8 +222,7 @@ impl TimeSeriesStore {
 
         let insert_at = series
             .events
-            .binary_search_by(|e| e.timestamp_secs.total_cmp(&timestamp))
-            .unwrap_or_else(|idx| idx);
+            .partition_point(|event| event.timestamp_secs <= timestamp);
         series.events.insert(
             insert_at,
             TimestampedEvent {
@@ -265,9 +293,54 @@ impl TimeSeriesStore {
 
     /// Return the latest state sample for an aircraft, if any.
     pub fn get_latest(&self, id: &AircraftId) -> Option<TimestampedState> {
-        self.data
-            .get(id)
+        let data = read_unpoisoned(&self.data);
+        data.get(id)
             .and_then(|series| series.states.last().cloned())
+    }
+
+    /// Return the last state whose timestamp is less than or equal to `timestamp`.
+    pub fn get_state_at_or_before(
+        &self,
+        id: &AircraftId,
+        timestamp: f64,
+    ) -> Option<TimestampedState> {
+        if !timestamp.is_finite() {
+            return None;
+        }
+        let data = read_unpoisoned(&self.data);
+        data.get(id).and_then(|series| {
+            let end = series
+                .states
+                .partition_point(|state| state.timestamp_secs <= timestamp);
+            end.checked_sub(1)
+                .and_then(|index| series.states.get(index).cloned())
+        })
+    }
+
+    /// Return whether an aircraft is spawned at the given timestamp.
+    pub fn is_spawned_at(&self, id: &AircraftId, timestamp: f64) -> bool {
+        let data = read_unpoisoned(&self.data);
+        data.get(id)
+            .and_then(|series| {
+                let end = if timestamp.is_infinite() && timestamp.is_sign_positive() {
+                    series.events.len()
+                } else if timestamp.is_finite() {
+                    series
+                        .events
+                        .partition_point(|event| event.timestamp_secs <= timestamp)
+                } else {
+                    0
+                };
+                series.events[..end]
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry.event {
+                        Event::Spawn(_) => Some(true),
+                        Event::Despawn(_) => Some(false),
+                        Event::Custom(_) => None,
+                    })
+            })
+            .unwrap_or(false)
     }
 
     /// Return all state samples for an aircraft within the inclusive time range.
@@ -277,13 +350,35 @@ impl TimeSeriesStore {
         start: f64,
         end: f64,
     ) -> Option<Vec<TimestampedState>> {
-        self.data.get(id).map(|series| {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
             series
                 .states
                 .iter()
                 .filter(|s| s.timestamp_secs >= start && s.timestamp_secs <= end)
                 .cloned()
                 .collect()
+        })
+    }
+
+    /// Return a paginated state range using binary search boundaries.
+    pub fn get_states_page(
+        &self,
+        id: &AircraftId,
+        start: f64,
+        end: f64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<StorePage<TimestampedState>> {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
+            let first = series
+                .states
+                .partition_point(|state| state.timestamp_secs < start);
+            let last = series
+                .states
+                .partition_point(|state| state.timestamp_secs <= end);
+            page_slice(&series.states[first..last], offset, limit)
         })
     }
 
@@ -294,7 +389,8 @@ impl TimeSeriesStore {
         start: f64,
         end: f64,
     ) -> Option<Vec<TimestampedEvent>> {
-        self.data.get(id).map(|series| {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
             series
                 .events
                 .iter()
@@ -304,16 +400,88 @@ impl TimeSeriesStore {
         })
     }
 
+    /// Return a paginated event range using binary search boundaries.
+    pub fn get_events_page(
+        &self,
+        id: &AircraftId,
+        start: f64,
+        end: f64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<StorePage<TimestampedEvent>> {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
+            let first = series
+                .events
+                .partition_point(|event| event.timestamp_secs < start);
+            let last = series
+                .events
+                .partition_point(|event| event.timestamp_secs <= end);
+            page_slice(&series.events[first..last], offset, limit)
+        })
+    }
+
     /// Return all aircraft IDs currently in the store, sorted.
     pub fn get_aircraft_ids(&self) -> Vec<AircraftId> {
-        let mut ids: Vec<_> = self.data.iter().map(|item| item.key().clone()).collect();
+        let data = read_unpoisoned(&self.data);
+        let mut ids: Vec<_> = data.iter().map(|item| item.key().clone()).collect();
         ids.sort();
         ids
     }
 
+    /// Return sorted summary metadata for all aircraft.
+    pub fn aircraft_summaries(&self) -> Vec<AircraftSummary> {
+        let data = read_unpoisoned(&self.data);
+        let mut summaries: Vec<_> = data
+            .iter()
+            .map(|entry| {
+                let series = entry.value();
+                AircraftSummary {
+                    id: entry.key().clone(),
+                    config: series.config.clone(),
+                    time_range: series
+                        .states
+                        .first()
+                        .zip(series.states.last())
+                        .map(|(first, last)| (first.timestamp_secs, last.timestamp_secs)),
+                    state_count: series.states.len(),
+                    event_count: series.events.len(),
+                }
+            })
+            .collect();
+        summaries.sort_by(|left, right| left.id.cmp(&right.id));
+        summaries
+    }
+
+    /// Clone a consistent store snapshot while ingestion is externally paused.
+    pub fn snapshot_clone(&self) -> Self {
+        let snapshot = Self::new();
+        let data = read_unpoisoned(&self.data);
+        let snapshot_data = write_unpoisoned(&snapshot.data);
+        for entry in &*data {
+            snapshot_data.insert(entry.key().clone(), entry.value().clone());
+        }
+        drop(snapshot_data);
+        snapshot
+    }
+
+    /// Atomically replace all contents with a clone of another store.
+    pub fn replace_from(&self, other: &Self) {
+        if std::ptr::eq(self, other) {
+            return;
+        }
+        let replacement = DashMap::new();
+        let other_data = read_unpoisoned(&other.data);
+        for entry in &*other_data {
+            replacement.insert(entry.key().clone(), entry.value().clone());
+        }
+        drop(other_data);
+        *write_unpoisoned(&self.data) = replacement;
+    }
+
     /// Remove all in-memory data.
     pub fn clear(&self) {
-        self.data.clear();
+        *write_unpoisoned(&self.data) = DashMap::new();
     }
 
     /// Persist the store to disk at the given directory path.
@@ -331,18 +499,19 @@ impl TimeSeriesStore {
     /// Load a store snapshot from disk, replacing current in-memory contents.
     pub fn load_from_disk(&self, path: &Path) -> Result<(), StoreError> {
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), "loading store from disk");
-        self.clear();
-
-        self.read_states_parquet(path)?;
-        self.read_events_parquet(path)?;
-        self.read_meta(path)?;
+        let loaded = Self::new();
+        loaded.read_states_parquet(path)?;
+        loaded.read_events_parquet(path)?;
+        loaded.read_meta(path)?;
+        self.replace_from(&loaded);
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), aircraft_count = self.get_aircraft_ids().len(), "store load completed");
         Ok(())
     }
 
     fn write_meta(&self, path: &Path) -> Result<(), StoreError> {
         let mut aircrafts = Vec::new();
-        for item in &self.data {
+        let data = read_unpoisoned(&self.data);
+        for item in &*data {
             let id = item.key().clone();
             let series = item.value();
             let time_range = series
@@ -381,11 +550,12 @@ impl TimeSeriesStore {
         let data = fs::read(meta_path)?;
         let meta: MetaFile = serde_json::from_slice(&data)?;
         for entry in meta.aircrafts {
-            if let Some(mut series) = self.data.get_mut(&entry.id) {
+            let data = read_unpoisoned(&self.data);
+            if let Some(mut series) = data.get_mut(&entry.id) {
                 if let (Some(name), Some(toml_config)) = (entry.name, entry.toml_config) {
                     series.config = Some(AircraftConfig { name, toml_config });
                 }
-            }
+            };
         }
 
         Ok(())
@@ -402,7 +572,8 @@ impl TimeSeriesStore {
         let mut ts = Vec::<f64>::new();
         let mut payloads = Vec::<Vec<u8>>::new();
 
-        for item in &self.data {
+        let data = read_unpoisoned(&self.data);
+        for item in &*data {
             let id = item.key().clone();
             for state in &item.value().states {
                 ids.push(id.clone());
@@ -440,7 +611,8 @@ impl TimeSeriesStore {
         let mut kinds = Vec::<String>::new();
         let mut payloads = Vec::<Vec<u8>>::new();
 
-        for item in &self.data {
+        let data = read_unpoisoned(&self.data);
+        for item in &*data {
             let id = item.key().clone();
             for event in &item.value().events {
                 ids.push(id.clone());
@@ -526,6 +698,27 @@ impl TimeSeriesStore {
     }
 }
 
+fn page_slice<T: Clone>(items: &[T], offset: usize, limit: usize) -> StorePage<T> {
+    let total = items.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    StorePage {
+        items: items[start..end].to_vec(),
+        total,
+        offset,
+        limit,
+    }
+}
+
+fn read_unpoisoned<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn write_unpoisoned<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn as_string_array<'a>(
     array: &'a Arc<dyn Array>,
     name: &str,
@@ -578,43 +771,51 @@ fn decode_event(kind: &str, payload: &[u8]) -> Result<Event, StoreError> {
 
 /// Return the total number of events across all aircraft.
 pub fn event_count_for(store: &TimeSeriesStore) -> usize {
-    store
-        .data
-        .iter()
-        .map(|entry| entry.value().events.len())
-        .sum()
+    let data = read_unpoisoned(&store.data);
+    data.iter().map(|entry| entry.value().events.len()).sum()
 }
 
 /// Return the total number of state samples across all aircraft.
 pub fn state_count_for(store: &TimeSeriesStore) -> usize {
-    store
-        .data
-        .iter()
-        .map(|entry| entry.value().states.len())
-        .sum()
+    let data = read_unpoisoned(&store.data);
+    data.iter().map(|entry| entry.value().states.len()).sum()
 }
 
 /// Return the number of distinct aircraft currently in the store.
 pub fn aircraft_count_for(store: &TimeSeriesStore) -> usize {
-    store.data.iter().count()
+    read_unpoisoned(&store.data).iter().count()
 }
 
-/// Return the global minimum and maximum state timestamps across all aircraft.
+/// Return the global minimum and maximum state/event timestamps.
 pub fn active_time_bounds(store: &TimeSeriesStore) -> Option<(f64, f64)> {
     let mut min_start: Option<f64> = None;
     let mut max_end: Option<f64> = None;
 
-    for entry in &store.data {
-        if let (Some(first), Some(last)) =
-            (entry.value().states.first(), entry.value().states.last())
-        {
+    let data = read_unpoisoned(&store.data);
+    for entry in &*data {
+        let series = entry.value();
+        let first = series
+            .states
+            .first()
+            .map(|state| state.timestamp_secs)
+            .into_iter()
+            .chain(series.events.first().map(|event| event.timestamp_secs))
+            .min_by(f64::total_cmp);
+        let last = series
+            .states
+            .last()
+            .map(|state| state.timestamp_secs)
+            .into_iter()
+            .chain(series.events.last().map(|event| event.timestamp_secs))
+            .max_by(f64::total_cmp);
+        if let (Some(first), Some(last)) = (first, last) {
             min_start = Some(match min_start {
-                Some(current) => current.min(first.timestamp_secs),
-                None => first.timestamp_secs,
+                Some(current) => current.min(first),
+                None => first,
             });
             max_end = Some(match max_end {
-                Some(current) => current.max(last.timestamp_secs),
-                None => last.timestamp_secs,
+                Some(current) => current.max(last),
+                None => last,
             });
         }
     }
@@ -718,7 +919,8 @@ mod tests {
         };
         store.append_event("a1".to_string(), 1.0, Event::Spawn(Box::new(spawn)));
 
-        let entry = store.data.get("a1").unwrap();
+        let data = read_unpoisoned(&store.data);
+        let entry = data.get("a1").unwrap();
         let config = entry.config.as_ref().unwrap();
         assert_eq!(config.name, "F-16");
         assert!(config.toml_config.contains("aircraft"));
@@ -745,9 +947,63 @@ mod tests {
         store.append_state("a1".to_string(), 20.0, mk_state(2.0));
         store.append_state("a2".to_string(), 5.0, mk_state(3.0));
         store.append_state("a2".to_string(), 25.0, mk_state(4.0));
+        store.append_event("a1".to_string(), 30.0, Event::Custom("end".to_string()));
+        store.append_event("a2".to_string(), 1.0, Event::Custom("begin".to_string()));
 
         let bounds = active_time_bounds(&store).unwrap();
-        assert_eq!(bounds.0, 5.0);
-        assert_eq!(bounds.1, 25.0);
+        assert_eq!(bounds.0, 1.0);
+        assert_eq!(bounds.1, 30.0);
+    }
+
+    #[test]
+    fn state_at_or_before_uses_last_duplicate() {
+        let store = TimeSeriesStore::new();
+        store.append_state("a1".to_string(), 1.0, mk_state(1.0));
+        store.append_state("a1".to_string(), 1.0, mk_state(2.0));
+        store.append_state("a1".to_string(), 2.0, mk_state(3.0));
+
+        let state = store
+            .get_state_at_or_before(&"a1".to_string(), 1.0)
+            .unwrap();
+        assert_eq!(state.state.position.unwrap().x, 2.0);
+        assert!(store
+            .get_state_at_or_before(&"a1".to_string(), 0.5)
+            .is_none());
+    }
+
+    #[test]
+    fn paginated_ranges_report_total() {
+        let store = TimeSeriesStore::new();
+        for timestamp in 0..5 {
+            store.append_state(
+                "a1".to_string(),
+                timestamp as f64,
+                mk_state(timestamp as f64),
+            );
+        }
+        let page = store
+            .get_states_page(&"a1".to_string(), 1.0, 4.0, 1, 2)
+            .unwrap();
+        assert_eq!(page.total, 4);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].timestamp_secs, 2.0);
+    }
+
+    #[test]
+    fn snapshot_replace_and_lifecycle_queries_work() {
+        let store = TimeSeriesStore::new();
+        store.append_event("a1".to_string(), 1.0, Event::Spawn(Box::default()));
+        store.append_event(
+            "a1".to_string(),
+            3.0,
+            Event::Despawn(pb::DespawnInfo::default()),
+        );
+        assert!(store.is_spawned_at(&"a1".to_string(), 2.0));
+        assert!(!store.is_spawned_at(&"a1".to_string(), 4.0));
+
+        let snapshot = store.snapshot_clone();
+        store.clear();
+        store.replace_from(&snapshot);
+        assert_eq!(store.aircraft_summaries().len(), 1);
     }
 }

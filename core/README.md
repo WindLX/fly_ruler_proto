@@ -1,6 +1,6 @@
 # Fly Ruler Protocol Kernel（中文文档）
 
-`fly_ruler_proto_core` 是 Fly Ruler 协议的内核实现，面向航空航天飞行模拟场景，提供高性能的二进制协议序列化、UDP 网络传输、时序数据存储与运行时编排能力。
+`fly_ruler_proto_core` 是 Fly Ruler 协议的内核实现，面向航空航天飞行模拟场景，提供高性能的二进制协议序列化、UDP 网络传输、时序数据存储、HTTP/WebSocket 管理接口与全局回放时间线。
 
 它位于 **Python SDK（发送端）** 与 **Godot Server（接收/可视化端）** 之间，支持每秒 1000Hz 以上的飞行器状态更新，并将延迟控制在微秒级序列化开销内。
 
@@ -53,6 +53,8 @@ fly_ruler_proto/
 │       │   └── server.rs       # UDP 服务端 / ServerRuntime
 │       ├── kernel.rs           # KernelRuntime 运行时编排
 │       ├── store.rs            # TimeSeriesStore 时序存储
+│       ├── playback.rs         # Live/Replay 全局播放状态机
+│       ├── management.rs       # Axum HTTP/WebSocket 管理服务
 │       ├── config.rs           # 运行时配置
 │       ├── logging.rs          # tracing 日志初始化
 │       └── utils.rs            # 内部辅助函数（uuid_to_hex, now_secs）
@@ -339,12 +341,16 @@ impl ServerRuntime {
 pub struct KernelRuntime {
     store: Arc<TimeSeriesStore>,
     config: RuntimeConfig,
+    playback: Arc<PlaybackController>,
+    ingestion: Arc<IngestionGate>,
     udp_runtime: Option<ServerRuntime>,
+    management_runtime: Option<ManagementServerRuntime>,
 }
 
 pub enum RuntimeError {
     Transport(TransportError),
     Store(StoreError),
+    Management(ManagementError),
 }
 ```
 
@@ -356,10 +362,14 @@ impl KernelRuntime {
     pub fn with_config(store: Arc<TimeSeriesStore>, config: RuntimeConfig) -> Self;
 
     pub async fn start_server(&mut self, addr: &str) -> Result<(), RuntimeError>;
-    pub async fn stop_server(&mut self) -> Result<(), RuntimeError>;
+    pub async fn stop_server(&mut self);
+    pub async fn start_management_server(&mut self, addr: &str) -> Result<(), RuntimeError>;
+    pub async fn stop_management_server(&mut self);
 
     pub async fn active_sessions(&self) -> Vec<Session>;
     pub fn udp_local_addr(&self) -> Result<SocketAddr, RuntimeError>;
+    pub fn management_local_addr(&self) -> Result<SocketAddr, RuntimeError>;
+    pub fn playback(&self) -> Arc<PlaybackController>;
 
     pub fn save_session(&self, path: &Path) -> Result<(), RuntimeError>;
     pub fn load_session(&self, path: &Path) -> Result<(), RuntimeError>;
@@ -420,6 +430,10 @@ impl TimeSeriesStore {
     pub fn append_message_with_config(&self, msg: pb::AircraftEvent, config: Option<AircraftConfig>);
 
     pub fn get_latest(&self, id: &AircraftId) -> Option<TimestampedState>;
+    pub fn get_state_at_or_before(&self, id: &AircraftId, at: f64) -> Option<TimestampedState>;
+    pub fn is_spawned_at(&self, id: &AircraftId, at: f64) -> bool;
+    pub fn get_states_page(&self, id: &AircraftId, start: f64, end: f64, offset: usize, limit: usize) -> Option<StorePage<TimestampedState>>;
+    pub fn get_events_page(&self, id: &AircraftId, start: f64, end: f64, offset: usize, limit: usize) -> Option<StorePage<TimestampedEvent>>;
     pub fn get_states_range(&self, id: &AircraftId, start: f64, end: f64) -> Option<Vec<TimestampedState>>;
     pub fn get_events_range(&self, id: &AircraftId, start: f64, end: f64) -> Option<Vec<TimestampedEvent>>;
     pub fn get_aircraft_ids(&self) -> Vec<AircraftId>;
@@ -446,6 +460,18 @@ pub struct TransportConfig {
 
 pub struct StoreConfig;
 
+pub struct ManagementConfig {
+    pub data_root: PathBuf,             // 默认 ./sessions
+    pub websocket_hz: f64,              // 默认 30 Hz
+    pub cors_origins: Vec<String>,
+}
+
+pub struct ReplayConfig {
+    pub default_speed: f64,             // 默认 1.0
+    pub min_speed: f64,                 // 默认 0.1
+    pub max_speed: f64,                 // 默认 16.0
+}
+
 pub struct LoggingConfig {
     pub level: String,                 // 默认 "warn"
     pub file_path: Option<String>,
@@ -454,11 +480,49 @@ pub struct LoggingConfig {
 pub struct RuntimeConfig {
     pub transport: TransportConfig,
     pub store: StoreConfig,
+    pub management: ManagementConfig,
+    pub replay: ReplayConfig,
     pub logging: LoggingConfig,
 }
 ```
 
-### 4.7 `logging.rs` — 日志初始化
+### 4.7 HTTP、WebSocket 与回放
+
+管理服务只允许绑定 loopback 地址。默认地址为 UDP
+`127.0.0.1:8080`、HTTP/WS `127.0.0.1:8081`，独立进程可通过
+`cargo run -p fly_ruler_proto_server` 启动。
+
+回放是所有飞行器共享的全局时间线：
+
+- `live`：每架飞机解析为最新状态；
+- `replay_paused`：固定在游标处，使用前值保持；
+- `replay_playing`：按 `0.1..=16.0` 正向推进，到末尾自动暂停。
+
+UDP 在回放期间继续写入 Store。每次控制命令、load 或 clear 都递增
+`revision`，渲染端可据此强制显式刷新。
+
+REST 根路径为 `/api/v1`：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/health`, `/status`, `/aircraft` | 健康、统计、飞机列表 |
+| GET | `/aircraft/{id}/state?at=...` | 当前游标或指定时间的前值 |
+| GET | `/aircraft/{id}/states`, `/events` | 时间范围分页查询 |
+| GET/POST/PUT | `/playback...` | live、pause、play、seek、speed |
+| POST | `/memory/clear` | 需提交 `{"confirm":true}` |
+| GET | `/sessions` | 列出数据根目录内的快照 |
+| POST | `/sessions/{name}/save`, `/load` | 异步保存/加载 |
+| GET | `/operations/{id}` | 查询异步操作状态 |
+
+`/api/v1/ws` 是严格只读的聚合快照流。它发送 `hello`、`snapshot`、
+`operation_status` 和 `store_changed`；控制命令必须走 REST。未指定飞机
+筛选时最多发送 64 架，并用 `truncated` 标记截断。
+
+保存时只在克隆一致内存快照期间暂停 ingestion，落盘在后台继续；加载先
+读入临时 Store，成功后才原子替换当前内存。维护窗口丢弃的 UDP 数量可从
+`GET /status` 查看。
+
+### 4.8 `logging.rs` — 日志初始化
 
 - 使用 `tracing_subscriber` + `tracing_appender`
 - 全局 `OnceLock` 保证仅初始化一次
@@ -477,13 +541,16 @@ RuntimeError
 │   ├── InvalidMessage
 │   ├── UnregisteredClient
 │   └── ClientChannelClosed
-└── StoreError
+├── StoreError
+│   ├── Io
+│   ├── Json
+│   ├── Parquet
+│   ├── Arrow
+│   ├── Decode
+│   └── InvalidData
+└── ManagementError
     ├── Io
-    ├── Json
-    ├── Parquet
-    ├── Arrow
-    ├── Decode
-    └── InvalidData
+    └── InvalidConfig
 ```
 
 ### 5.2 Protobuf 错误码
@@ -657,3 +724,7 @@ cargo test -p fly_ruler_proto_core
 - 项目总览：`../AGENT.md`
 - Protobuf Schema：`../proto/fly_ruler.proto`
 - Crate 内 Schema 镜像：`proto/fly_ruler.proto`
+
+## 11. TODO
+
+- [ ] Management 太大，拆分为多个 mod
