@@ -318,11 +318,41 @@ jobs:
           find dist -maxdepth 1 -type f -name '*.whl' -print
           test -n "$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
           test -z "$(find dist -maxdepth 1 -type f ! -name '*.whl' -print -quit)"
+      - name: Check whether this version already exists on PyPI
+        id: pypi-version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          endpoint="https://pypi.org/pypi/fly-ruler-proto-python/${version}/json"
+          status="$(
+            curl --silent --show-error \
+              --retry 3 \
+              --user-agent "fly_ruler_proto-release-ci/1.0 (https://github.com/WindLX/fly_ruler_proto)" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "${endpoint}"
+          )"
+
+          case "${status}" in
+            200)
+              echo "fly-ruler-proto-python ${version} already exists on PyPI; skipping upload."
+              echo "exists=true" >> "${GITHUB_OUTPUT}"
+              ;;
+            404)
+              echo "exists=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "::error::Unexpected PyPI API response: HTTP ${status}"
+              exit 1
+              ;;
+          esac
       - name: Publish Python distributions to PyPI
+        if: steps.pypi-version.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
-          skip-existing: true
 
   # ============================================================
   # Create GitHub Release with all build artifacts
