@@ -16,7 +16,8 @@ develop:
 # Run the full local test suite (Rust + Python)
 test: test-rs test-py
 
-# Run Rust workspace tests
+# Run Rust workspace tests (excludes Python/Godot extension crates, which are
+# tested through their respective language runtimes via `test-py`).
 test-rs:
     cargo test --workspace
 
@@ -48,6 +49,14 @@ web-dev:
 web-build:
     cd web && pnpm build
 
+# Format the management console source code
+web-fmt:
+    cd web && pnpm format
+
+# Run ESLint with auto-fix on the management console
+web-lint-fix:
+    cd web && pnpm lint --fix
+
 # Lint, test, type-check, and build the management console
 web-check:
     cd web && pnpm check
@@ -70,6 +79,7 @@ _check-rs:
 check: _check-rs web-check
     @echo "All checks passed"
 
-# Auto-format Rust code
+# Auto-format Rust and frontend code
 fmt:
     cargo fmt
+    cd web && pnpm format
