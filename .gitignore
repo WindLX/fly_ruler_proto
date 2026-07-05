@@ -19,3 +19,5 @@ build/
 
 # github action
 actions-runner
+
+sessions

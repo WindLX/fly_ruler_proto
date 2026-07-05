@@ -30,7 +30,8 @@ v1 priorities:
 - `transport.rs`: UDP client/server + session bookkeeping.
 - `store.rs`: in-memory time-series storage and persistence.
 - `playback.rs`: shared Live/Replay cursor, speed, and revision state.
-- `management.rs`: REST/WebSocket DTOs and asynchronous persistence operations.
+- `management/`: REST/WebSocket runtime, ingestion gate, Series queries,
+  Workspace persistence, global timeline events, and SPA hosting.
 - `kernel.rs`: orchestration runtime (recv loop, ACK, ingestion, lifecycle).
 - `logging.rs`: tracing subscriber initialization.
 - `config.rs`: runtime configuration (transport/store/logging).
@@ -63,6 +64,7 @@ bindings/python | bindings/godot | bindings/msfs | fly-ruler-server
             +--> PlaybackController (Live/Replay global cursor)
             |
             +--> Management Server (HTTP + read-only WebSocket)
+            |       +--> Vue Web Console (runtime-configured SPA)
             |
             +--> Observability (structured tracing)
 ```
@@ -75,6 +77,10 @@ Design rules:
 - Store remains explicit and deterministic: no hidden autosave or interpolation.
 - UDP ingestion continues during replay; save/load/clear use short maintenance gates.
 - Management file access is restricted to validated names below a configured data root.
+- Production Web assets are loaded from `web/dist`; Rust renders `index.html`
+  with same-origin or explicitly configured public API/WS endpoints.
+- Stored timestamps remain seconds. The Web console converts them to a
+  global-origin relative axis while retaining absolute time for queries and seek.
 - TOML configs, custom fields, and custom events are persisted as data, without schema validation.
 
 ## 4. Configuration Model
@@ -142,7 +148,8 @@ Planned improvements:
 - No protocol schema breaking changes.
 - No immediate switch to a different primary transport.
 - No hidden autosave behavior in core runtime.
-- No interpolation, reverse playback, looping, authentication, or Web UI.
+- No interpolation, reverse playback, looping, authentication, or server-side
+  chart rendering.
 - No schema validation for `toml_config` or `custom_fields` in v1.
 
 ## 8. Compatibility Notes
