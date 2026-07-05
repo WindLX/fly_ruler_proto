@@ -1,7 +1,5 @@
 """Type stubs for fly_ruler_proto_python._core."""
 
-from typing import Optional
-
 CustomFieldValue = float | int | bool | str | bytes
 
 PROTOCOL_VERSION: str
@@ -29,6 +27,36 @@ class Quaternion:
     def identity() -> "Quaternion": ...
     def __repr__(self) -> str: ...
 
+class ControlSurfaceState:
+    alieron_left_rad: float | None
+    alieron_right_rad: float | None
+    elevator_rad: float | None
+    rudder_rad: float | None
+    flap_left_rad: float | None
+    flap_right_rad: float | None
+    spoiler_ratio: float | None
+
+    def __init__(
+        self,
+        aileron_left_rad: float | None = None,
+        aileron_right_rad: float | None = None,
+        elevator_rad: float | None = None,
+        rudder_rad: float | None = None,
+        flap_left_rad: float | None = None,
+        flap_right_rad: float | None = None,
+        spoiler_ratio: float | None = None,
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
+class EngineState:
+    index: int
+    throttle_lever_ratio: float | None
+
+    def __init__(
+        self, index: int, throttle_lever_ratio: float | None = None
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
 class DerivedState:
     lat: float
     lon: float
@@ -39,6 +67,9 @@ class DerivedState:
     eas: float
     gamma: float
     chi: float
+    ias: float | None
+    cas: float | None
+    mach: float | None
 
     def __init__(
         self,
@@ -51,6 +82,9 @@ class DerivedState:
         eas: float = 0.0,
         gamma: float = 0.0,
         chi: float = 0.0,
+        ias: float | None = None,
+        cas: float | None = None,
+        mach: float | None = None,
     ) -> None: ...
     def __repr__(self) -> str: ...
 
@@ -59,19 +93,22 @@ class AircraftState:
     velocity: Vector3
     attitude: Quaternion
     angular_velocity: Vector3
-    derived: Optional[DerivedState]
+    derived: DerivedState | None
+    control_surfaces: ControlSurfaceState | None
+    engines: list[EngineState]
     custom_fields: dict[str, CustomFieldValue]
 
     def __init__(
         self,
-        position: Optional[Vector3] = None,
-        velocity: Optional[Vector3] = None,
-        attitude: Optional[Quaternion] = None,
-        angular_velocity: Optional[Vector3] = None,
-        derived: Optional[DerivedState] = None,
-        custom_fields: Optional[dict[str, CustomFieldValue]] = None,
+        position: Vector3 | None = None,
+        velocity: Vector3 | None = None,
+        attitude: Quaternion | None = None,
+        angular_velocity: Vector3 | None = None,
+        derived: DerivedState | None = None,
+        control_surfaces: ControlSurfaceState | None = None,
+        engines: list[EngineState] | None = None,
+        custom_fields: dict[str, CustomFieldValue] | None = None,
     ) -> None: ...
-
     @staticmethod
     def hover() -> "AircraftState": ...
     def set_custom_field(self, field_id: str, value: CustomFieldValue) -> None: ...
@@ -82,15 +119,19 @@ class PyClient:
         self,
         addr: str,
         aircraft_name: str,
-        initial_state: Optional[AircraftState] = None,
+        initial_state: AircraftState | None = None,
         toml_config: str = "",
         heartbeat_interval_secs: float = 1.0,
     ) -> None: ...
     def client_uuid(self) -> str: ...
     def aircraft_uuid(self) -> str: ...
-    def update_state(self, state: AircraftState, timestamp: Optional[float] = None) -> None: ...
-    def create_event(self, event_name: str, timestamp: Optional[float] = None) -> None: ...
-    def despawn(self, reason: Optional[str] = None, timestamp: Optional[float] = None) -> None: ...
+    def update_state(
+        self, state: AircraftState, timestamp: float | None = None
+    ) -> None: ...
+    def create_event(self, event_name: str, timestamp: float | None = None) -> None: ...
+    def despawn(
+        self, reason: str | None = None, timestamp: float | None = None
+    ) -> None: ...
     def close(self) -> None: ...
 
 class PyServer:
