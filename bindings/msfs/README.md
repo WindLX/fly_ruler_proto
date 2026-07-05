@@ -65,13 +65,15 @@ Useful options:
 
 ```text
 --config ./fly-ruler-msfs.toml
---listen 127.0.0.1:8080
+--listen 127.0.0.1:18002
 --aircraft-id <32-character FlyRuler UUID>
 --tick-hz 240
 --stale-timeout-ms 500
---http-listen 127.0.0.1:8081
+--http-listen 127.0.0.1:18003
 --data-root ./sessions
 --web-root ./web/dist
+--public-api-base-url https://sim.example.test/api/v1
+--public-websocket-url wss://sim.example.test/api/v1/ws
 --ws-hz 30
 --cors-origin http://localhost:5173
 --http
@@ -85,18 +87,13 @@ Live follows the newest sample, paused replay writes a seek exactly once, and pl
 
 ## TOML configuration and logging
 
-Copy `fly-ruler-msfs.example.toml` to `fly-ruler-msfs.toml`, or pass a custom
-path through `--config`. If `--config` is omitted, the bridge automatically
-loads `fly-ruler-msfs.toml` from the current directory when it exists.
+Copy `fly-ruler-msfs.example.toml` to `fly-ruler-msfs.toml`, or pass a custom path through `--config`. If `--config` is omitted, the bridge automatically loads `fly-ruler-msfs.toml` from the current directory when it exists.
 
-Configuration precedence is CLI, then TOML, then built-in defaults. Relative
-`data_root`, `web_root`, and `logging.file_path` values are resolved relative
-to the TOML file. `--http` and `--no-http` explicitly override
-`management.enabled`.
+Configuration precedence is CLI, then TOML, then built-in defaults. Relative `data_root`, `web_root`, and `logging.file_path` values are resolved relative to the TOML file. `--http` and `--no-http` explicitly override `management.enabled`.
 
-The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the
-Python binding. `RUST_LOG` has priority over the configured log level. Without
-`logging.file_path`, structured logs are written to the terminal.
+`management.public_api_base_url` and `management.public_websocket_url` are optional. When omitted, the embedded Web console uses same-origin API paths. Set them only when the browser reaches the bridge through a reverse proxy or a different public host.
+
+The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the Python binding. `RUST_LOG` has priority over the configured log level. Without `logging.file_path`, structured logs are written to the terminal.
 
 ## State contract
 

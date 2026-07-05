@@ -17,6 +17,10 @@ TimeSeriesStore（core::store）  ←  UDP Server（core::transport）
 - **Python 端**负责生成飞行器数据并发送。
 - **Godot 端**负责接收 UDP 报文、维护会话、存储时序数据，并通过 `Dictionary` / `Array` 将状态暴露给 GDScript，供场景节点驱动 3D 模型。
 
+需要独立的数据管理、历史曲线和回放界面时，可同时运行
+`fly-ruler-server` 并使用仓库中的 Vue Web 控制台。Godot binding 保持
+专注于引擎内可视化，不代理 Web 静态资源。
+
 ## 2. 项目布局
 
 ```text
@@ -121,7 +125,7 @@ macos.release = "res://addons/fly_ruler_proto/libfly_ruler_proto_godot.dylib"
 
 ```gdscript
 var server := FlyRulerServer.new()
-var ok := server.start_server("127.0.0.1:8080")
+var ok := server.start_server("127.0.0.1:18002")
 if not ok:
     push_error("Failed to start FlyRulerServer")
 ```
@@ -148,7 +152,7 @@ if server.is_running():
 返回本地监听地址。未启动时返回空字符串。
 
 ```gdscript
-print(server.local_addr())  # "127.0.0.1:8080"
+print(server.local_addr())  # "127.0.0.1:18002"
 ```
 
 ### 5.2 会话信息
@@ -278,7 +282,7 @@ var server: FlyRulerServer
 
 func _ready() -> void:
     server = FlyRulerServer.new()
-    var ok := server.start_server("127.0.0.1:8080")
+    var ok := server.start_server("127.0.0.1:18002")
     if not ok:
         push_error("Failed to start FlyRulerServer")
         return
@@ -399,7 +403,7 @@ var server: FlyRulerServer
 
 func _ready() -> void:
     server = FlyRulerServer.new()
-    var ok := server.start_server("127.0.0.1:8080")
+    var ok := server.start_server("127.0.0.1:18002")
     if not ok:
         push_error("Failed to start FlyRulerServer")
         return

@@ -467,6 +467,8 @@ pub struct StoreConfig;
 pub struct ManagementConfig {
     pub data_root: PathBuf,             // 默认 ./sessions
     pub web_root: Option<PathBuf>,       // 默认 ./web/dist
+    pub public_api_base_url: Option<String>,
+    pub public_websocket_url: Option<String>,
     pub websocket_hz: f64,              // 默认 30 Hz
     pub cors_origins: Vec<String>,
 }
@@ -494,7 +496,7 @@ pub struct RuntimeConfig {
 ### 4.7 HTTP、WebSocket 与回放
 
 管理服务只允许绑定 loopback 地址。默认地址为 UDP
-`127.0.0.1:8080`、HTTP/WS `127.0.0.1:8081`，独立进程可通过
+`127.0.0.1:18002`、HTTP/WS `127.0.0.1:18003`，独立进程可通过
 `cargo run -p fly_ruler_proto_server` 启动。
 
 回放是所有飞行器共享的全局时间线：
@@ -513,6 +515,7 @@ REST 根路径为 `/api/v1`：
 | GET | `/health`, `/status`, `/aircraft` | 健康、统计、飞机列表 |
 | GET | `/aircraft/{id}/state?at=...` | 当前游标或指定时间的前值 |
 | GET | `/aircraft/{id}/states`, `/events` | 时间范围分页查询 |
+| GET | `/timeline/events` | 全部飞机事件的全局时间排序与分页 |
 | GET/POST/PUT | `/playback...` | live、pause、play、seek、speed |
 | POST | `/memory/clear` | 需提交 `{"confirm":true}` |
 | GET | `/sessions` | 列出数据根目录内的快照 |
@@ -532,9 +535,14 @@ Series selector 使用带 `kind` 的 tagged JSON（`standard`、
 LTTB 降采样。Workspace 保存在 `data_root/.fly-ruler/workspace.json`，
 每次更新递增 revision，并通知其他浏览器重新加载。
 
-`ManagementConfig.web_root` 指向存在的目录时，服务会托管 Vue SPA 并提供
-`index.html` fallback；目录缺失时保持 API-only，且 `/api/v1/*` 始终返回
-JSON 错误而不会被 SPA fallback 接管。
+`ManagementConfig.web_root` 指向存在的目录时，服务会托管 Vue SPA。Rust
+读取 `index.html` 模板并注入 `api_base_url` 与 `websocket_url`；默认使用
+同源 `/api/v1` 和 `/api/v1/ws`，也可通过 public URL 配置覆盖。静态资源
+和 SPA fallback 均由 Rust 提供，目录缺失时保持 API-only，且
+`/api/v1/*` 始终返回 JSON 错误。
+
+Web 曲线与时间轴使用全局数据起点作为相对零点，以避免 Unix 秒造成的坐标
+压缩；REST、Store、Parquet 和 playback cursor 始终保留原始秒时间戳。
 
 保存时只在克隆一致内存快照期间暂停 ingestion，落盘在后台继续；加载先
 读入临时 Store，成功后才原子替换当前内存。维护窗口丢弃的 UDP 数量可从
@@ -633,7 +641,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut runtime = KernelRuntime::with_config(store, config);
 
-    runtime.start_server("127.0.0.1:8080").await?;
+    runtime.start_server("127.0.0.1:18002").await?;
     println!("server listening on {}", runtime.udp_local_addr()?);
 
     // 运行一段时间 ...
@@ -658,7 +666,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut client = AircraftClient::connect(
-        "127.0.0.1:8080",
+        "127.0.0.1:18002",
         &LoggingConfig::default(),
         "F-16".to_string(),
         initial_state,

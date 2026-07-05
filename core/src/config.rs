@@ -37,6 +37,14 @@ pub struct ManagementConfig {
     pub data_root: PathBuf,
     /// Optional Vite distribution directory served as a single-page app.
     pub web_root: Option<PathBuf>,
+    /// Public REST API base injected into the Web console.
+    ///
+    /// `None` uses the same-origin `/api/v1` path.
+    pub public_api_base_url: Option<String>,
+    /// Public WebSocket URL injected into the Web console.
+    ///
+    /// `None` uses the same-origin `/api/v1/ws` path.
+    pub public_websocket_url: Option<String>,
     /// Aggregate WebSocket snapshot frequency.
     pub websocket_hz: f64,
     /// Browser origins allowed to access the localhost API.
@@ -48,6 +56,8 @@ impl Default for ManagementConfig {
         Self {
             data_root: PathBuf::from("sessions"),
             web_root: Some(PathBuf::from("web/dist")),
+            public_api_base_url: None,
+            public_websocket_url: None,
             websocket_hz: 30.0,
             cors_origins: vec![
                 "http://localhost:3000".to_string(),
@@ -56,8 +66,8 @@ impl Default for ManagementConfig {
                 "http://127.0.0.1:5173".to_string(),
                 "http://localhost:8000".to_string(),
                 "http://127.0.0.1:8000".to_string(),
-                "http://localhost:8080".to_string(),
-                "http://127.0.0.1:8080".to_string(),
+                "http://localhost:18003".to_string(),
+                "http://127.0.0.1:18003".to_string(),
             ],
         }
     }

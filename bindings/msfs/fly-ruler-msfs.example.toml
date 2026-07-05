@@ -1,14 +1,17 @@
 [bridge]
-listen = "127.0.0.1:8080"
+listen = "127.0.0.1:18002"
 # aircraft_id = "00112233445566778899aabbccddeeff"
 tick_hz = 240.0
 stale_timeout_ms = 500
 
 [management]
 enabled = true
-listen = "127.0.0.1:8081"
+listen = "0.0.0.0:18003"
+# Paths are resolved relative to the directory from which the bridge is launched.
 data_root = "sessions"
 web_root = "web/dist"
+# public_api_base_url = "https://sim.example.test/api/v1"
+# public_websocket_url = "wss://sim.example.test/api/v1/ws"
 ws_hz = 30.0
 cors_origins = [
   "http://localhost:5173",

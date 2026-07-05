@@ -30,6 +30,10 @@ pub struct Args {
     #[arg(long)]
     pub web_root: Option<PathBuf>,
     #[arg(long)]
+    pub public_api_base_url: Option<String>,
+    #[arg(long)]
+    pub public_websocket_url: Option<String>,
+    #[arg(long)]
     pub ws_hz: Option<f64>,
     #[arg(long = "cors-origin")]
     pub cors_origins: Vec<String>,
@@ -67,6 +71,8 @@ struct ManagementSection {
     listen: Option<String>,
     data_root: Option<PathBuf>,
     web_root: Option<PathBuf>,
+    public_api_base_url: Option<String>,
+    public_websocket_url: Option<String>,
     ws_hz: Option<f64>,
     cors_origins: Option<Vec<String>>,
 }
@@ -100,25 +106,24 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
         let default = PathBuf::from(DEFAULT_CONFIG_FILE);
         default.is_file().then_some(default)
     });
-    let (file, base_dir) = match config_path.as_ref() {
+    let file = match config_path.as_ref() {
         Some(path) => {
             let source = fs::read_to_string(path)?;
-            let parsed = toml::from_str::<FileConfig>(&source)?;
-            let base = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf();
-            (parsed, base)
+            toml::from_str::<FileConfig>(&source)?
         }
-        None => (FileConfig::default(), PathBuf::from(".")),
+        None => FileConfig::default(),
     };
+    // All relative paths are resolved from the current working directory (the
+    // directory from which the bridge was launched). This keeps TOML files
+    // location-agnostic and matches user intuition: `web/dist` means "the
+    // `web/dist` folder next to where I ran the executable".
+    let base_dir = std::env::current_dir()?;
 
     let default_management = ManagementConfig::default();
     let listen = args
         .listen
         .or(file.bridge.listen)
-        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        .unwrap_or_else(|| "127.0.0.1:18002".to_string());
     let aircraft_id = args.aircraft_id.or(file.bridge.aircraft_id);
     let tick_hz = args.tick_hz.or(file.bridge.tick_hz).unwrap_or(240.0);
     let stale_timeout_ms = args
@@ -135,7 +140,7 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
     let http_listen = args
         .http_listen
         .or(file.management.listen)
-        .unwrap_or_else(|| "127.0.0.1:8081".to_string());
+        .unwrap_or_else(|| "127.0.0.1:18003".to_string());
     let data_root = resolve_path(
         args.data_root
             .or(file.management.data_root)
@@ -149,6 +154,12 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
         &base_dir,
     );
     let websocket_hz = args.ws_hz.or(file.management.ws_hz).unwrap_or(30.0);
+    let public_api_base_url = args
+        .public_api_base_url
+        .or(file.management.public_api_base_url);
+    let public_websocket_url = args
+        .public_websocket_url
+        .or(file.management.public_websocket_url);
     let cors_origins = if args.cors_origins.is_empty() {
         file.management
             .cors_origins
@@ -179,6 +190,8 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
             management: ManagementConfig {
                 data_root,
                 web_root: Some(web_root),
+                public_api_base_url,
+                public_websocket_url,
                 websocket_hz,
                 cors_origins,
             },
@@ -230,6 +243,8 @@ mod tests {
             http_listen: None,
             data_root: None,
             web_root: None,
+            public_api_base_url: None,
+            public_websocket_url: None,
             ws_hz: None,
             cors_origins: Vec::new(),
             http: false,
@@ -242,8 +257,8 @@ mod tests {
     #[test]
     fn defaults_match_cli_contract() {
         let config = resolve(args()).unwrap();
-        assert_eq!(config.listen, "127.0.0.1:8080");
-        assert_eq!(config.http_listen, "127.0.0.1:8081");
+        assert_eq!(config.listen, "127.0.0.1:18002");
+        assert_eq!(config.http_listen, "127.0.0.1:18003");
         assert_eq!(config.tick_hz, 240.0);
         assert!(config.management_enabled);
     }
@@ -291,6 +306,8 @@ tick_hz = 75.0
 enabled = false
 data_root = "recordings"
 web_root = "dashboard"
+public_api_base_url = "https://example.test/api/v1"
+public_websocket_url = "wss://example.test/api/v1/ws"
 
 [logging]
 level = "debug"
@@ -305,14 +322,25 @@ file_path = "logs/bridge.log"
         let config = resolve(cli).unwrap();
         assert_eq!(config.tick_hz, 120.0);
         assert!(config.management_enabled);
-        assert_eq!(config.runtime.management.data_root, root.join("recordings"));
+        // Relative paths are resolved from the current working directory, not
+        // from the config file location.
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(config.runtime.management.data_root, cwd.join("recordings"));
         assert_eq!(
             config.runtime.management.web_root,
-            Some(root.join("dashboard"))
+            Some(cwd.join("dashboard"))
+        );
+        assert_eq!(
+            config.runtime.management.public_api_base_url.as_deref(),
+            Some("https://example.test/api/v1")
+        );
+        assert_eq!(
+            config.runtime.management.public_websocket_url.as_deref(),
+            Some("wss://example.test/api/v1/ws")
         );
         assert_eq!(
             config.runtime.logging.file_path.as_deref(),
-            Some(root.join("logs/bridge.log").to_string_lossy().as_ref())
+            Some(cwd.join("logs/bridge.log").to_string_lossy().as_ref())
         );
         let _ = fs::remove_dir_all(root);
     }

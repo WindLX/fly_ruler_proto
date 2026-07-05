@@ -8,7 +8,7 @@
 //!     PyClient, AircraftState, Vector3, Quaternion
 //! )
 //!
-//! client = PyClient("127.0.0.1:8080")
+//! client = PyClient("127.0.0.1:18002")
 //! ```
 
 use pyo3::prelude::*;

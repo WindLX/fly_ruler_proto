@@ -11,12 +11,14 @@ FlyRulerClient / PyClient（本绑定）
     ↓
 fly_ruler_proto_core::transport::AircraftClient
     ↓
-UDP 网络  →  Fly Ruler Server / Godot
+UDP 网络  →  Fly Ruler Server / MSFS / Godot
 ```
 
 - `PyClient`：Rust 实现的 aircraft-bound 客户端（一个实例对应一架飞行器）。
 - `FlyRulerClient`：Python 高层包装，提供上下文管理器与最佳实践。
 - `PyServer`：底层 UDP 服务端包装（主要用于测试或特殊场景）。
+
+发送到 `fly-ruler-server` 的状态可以在同仓库 Web 控制台中实时查看、绘制 历史曲线、按事件跳转和回放。显式 `timestamp` 仍使用秒；推荐 Unix wall time，前端会自动转换为相对仿真时间显示。
 
 ## 2. 环境准备
 
@@ -191,7 +193,7 @@ class FlyRulerClient:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `address` | `str` | 必填 | 服务端地址，例如 `"127.0.0.1:8080"` |
+| `address` | `str` | 必填 | 服务端地址，例如 `"127.0.0.1:18002"` |
 | `aircraft_name` | `str` | 必填 | 飞行器名称 |
 | `initial_state` | `AircraftState \| None` | `None` | 初始状态，默认悬停 |
 | `toml_config` | `str` | `""` | TOML 格式飞行器配置 |
@@ -251,7 +253,7 @@ client.close()
 ```python
 from fly_ruler_proto_python import FlyRulerClient, create_aircraft_state
 
-with FlyRulerClient("127.0.0.1:8080", "F-16") as aircraft:
+with FlyRulerClient("127.0.0.1:18002", "F-16") as aircraft:
     aircraft.update_state(create_aircraft_state(position=(100.0, 0.0, -1000.0)))
     aircraft.create_event("missile_launch")
 ```
@@ -264,7 +266,7 @@ with FlyRulerClient("127.0.0.1:8080", "F-16") as aircraft:
 from fly_ruler_proto_python._core import PyClient, AircraftState
 
 client = PyClient(
-    "127.0.0.1:8080",
+    "127.0.0.1:18002",
     "F-16",
     AircraftState.hover(),
     "",
@@ -293,7 +295,7 @@ client = PyClient(
 ```python
 from fly_ruler_proto_python._core import PyServer
 
-server = PyServer("127.0.0.1:8080")
+server = PyServer("127.0.0.1:18002")
 print(server.local_addr())
 server.close()
 ```
@@ -338,7 +340,7 @@ RUST_LOG=debug python your_script.py
 import time
 from fly_ruler_proto_python import FlyRulerClient, create_aircraft_state
 
-SERVER = "127.0.0.1:8080"
+SERVER = "127.0.0.1:18002"
 
 
 def main():
@@ -387,7 +389,7 @@ pytest tests/
 
 ```python
 try:
-    client = FlyRulerClient("127.0.0.1:8080", "F-16")
+    client = FlyRulerClient("127.0.0.1:18002", "F-16")
 except ConnectionError as e:
     print(f"连接失败: {e}")
 ```
