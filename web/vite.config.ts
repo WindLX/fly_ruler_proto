@@ -4,8 +4,22 @@ import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
-  plugins: [vue(), tailwindcss()],
+const runtimeConfigPlugin = (command: string) => ({
+  name: 'fly-ruler-runtime-config',
+  transformIndexHtml(html: string) {
+    if (command !== 'serve') return html
+    return html.replace(
+      '__FLY_RULER_RUNTIME_CONFIG__',
+      JSON.stringify({
+        api_base_url: '/api/v1',
+        websocket_url: '/api/v1/ws',
+      }),
+    )
+  },
+})
+
+export default defineConfig(({ command }) => ({
+  plugins: [vue(), tailwindcss(), runtimeConfigPlugin(command)],
   resolve: {
     alias: {
       '@': path.resolve(path.dirname(fileURLToPath(import.meta.url)), './src'),
@@ -24,4 +38,4 @@ export default defineConfig({
   test: {
     environment: 'node',
   },
-})
+}))

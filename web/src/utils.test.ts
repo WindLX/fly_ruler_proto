@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
-import { defaultWorkspace, extractValue, formatNumber, selectorKey } from '@/utils'
+import {
+  defaultWorkspace,
+  extractValue,
+  formatAbsoluteTime,
+  formatNumber,
+  formatRelativeTime,
+  niceTickStep,
+  selectorKey,
+  toAbsoluteTime,
+  toRelativeTime,
+} from '@/utils'
 
 describe('series helpers', () => {
   it('keeps custom identifiers unambiguous', () => {
@@ -26,5 +36,14 @@ describe('series helpers', () => {
   it('creates a valid default workspace and formats values', () => {
     expect(defaultWorkspace().max_points).toBe(2000)
     expect(formatNumber(12.3456, 'fixed', 2)).toBe('12.35')
+  })
+
+  it('converts and formats absolute and relative timestamps', () => {
+    expect(toRelativeTime(1_800_000_012.5, 1_800_000_000)).toBe(12.5)
+    expect(toAbsoluteTime(12.5, 1_800_000_000)).toBe(1_800_000_012.5)
+    expect(formatRelativeTime(62.25)).toBe('+01:02.250')
+    expect(formatAbsoluteTime(12.5)).toBe('t=00:12.500')
+    expect(formatAbsoluteTime(1_800_000_000)).not.toContain('1800000000')
+    expect(niceTickStep(92, 8)).toBe(20)
   })
 })

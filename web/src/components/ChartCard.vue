@@ -19,7 +19,14 @@ import { useSeriesStore } from '@/stores/series'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { ChartModel, CurveStyle } from '@/types'
-import { curveKey, formatNumber } from '@/utils'
+import {
+  curveKey,
+  formatAbsoluteTime,
+  formatNumber,
+  formatRelativeTime,
+  toAbsoluteTime,
+  toRelativeTime,
+} from '@/utils'
 
 use([
   CanvasRenderer,
@@ -37,23 +44,55 @@ const seriesStore = useSeriesStore()
 const server = useServerStore()
 const workspace = useWorkspaceStore()
 const visibleCurves = computed(() => props.chart.curves.filter((curve) => curve.visible))
+const bounds = computed<[number, number]>(() => server.playback?.bounds ?? [0, 1])
+const timeOrigin = computed(() => bounds.value[0])
+const palette = computed(() =>
+  workspace.workspace.theme === 'dark'
+    ? {
+        text: '#bac4cf',
+        muted: '#7f8c9a',
+        border: '#697583',
+        grid: 'rgba(127, 140, 154, 0.14)',
+        panel: '#20262d',
+        accentSoft: 'rgba(75, 146, 240, 0.18)',
+        cursor: '#f59e0b',
+      }
+    : {
+        text: '#465465',
+        muted: '#748092',
+        border: '#7b8794',
+        grid: 'rgba(70, 84, 101, 0.13)',
+        panel: '#edf2f7',
+        accentSoft: 'rgba(36, 120, 223, 0.13)',
+        cursor: '#c56700',
+      },
+)
 
 function transformed(curve: CurveStyle): Array<[number, number]> {
   return (seriesStore.data[curveKey(curve)]?.points ?? []).map(([time, value]) => [
-    time,
+    toRelativeTime(time, timeOrigin.value),
     value * curve.scale + curve.offset,
   ])
 }
 
 const option = computed<EChartsOption>(() => {
   const cursor = server.playback?.cursor_secs
+  const view = props.chart.view
+  const zoomStartValue =
+    view.zoom_start_value === undefined
+      ? undefined
+      : toRelativeTime(view.zoom_start_value, timeOrigin.value)
+  const zoomEndValue =
+    view.zoom_end_value === undefined
+      ? undefined
+      : toRelativeTime(view.zoom_end_value, timeOrigin.value)
   return {
     animation: false,
     backgroundColor: 'transparent',
     grid: { left: 54, right: 54, top: props.chart.legend_visible ? 48 : 22, bottom: 54 },
     legend: {
       show: props.chart.legend_visible,
-      textStyle: { color: 'var(--text-secondary)', fontSize: 11 },
+      textStyle: { color: palette.value.text, fontSize: 11 },
       top: 8,
     },
     tooltip: {
@@ -62,7 +101,12 @@ const option = computed<EChartsOption>(() => {
       formatter(params: unknown) {
         const items = Array.isArray(params) ? params : [params]
         const first = items[0] as { axisValue?: number } | undefined
-        const lines = [`<b>${Number(first?.axisValue ?? 0).toFixed(3)} s</b>`]
+        const relative = Number(first?.axisValue ?? 0)
+        const absolute = toAbsoluteTime(relative, timeOrigin.value)
+        const lines = [
+          `<b>${formatRelativeTime(relative)}</b>`,
+          formatAbsoluteTime(absolute, workspace.workspace.locale),
+        ]
         for (const item of items as Array<{
           seriesIndex: number
           marker: string
@@ -80,34 +124,54 @@ const option = computed<EChartsOption>(() => {
     },
     xAxis: {
       type: 'value',
-      name: 't [s]',
-      axisLine: { lineStyle: { color: 'var(--border-strong)' } },
-      axisLabel: { color: 'var(--text-muted)' },
-      splitLine: { lineStyle: { color: 'var(--grid-color)' } },
+      scale: true,
+      name: 'Δt',
+      min: 0,
+      max: Math.max(bounds.value[1] - bounds.value[0], 0.001),
+      axisLine: { lineStyle: { color: palette.value.border } },
+      axisLabel: {
+        color: palette.value.muted,
+        formatter: (value: number) => formatRelativeTime(value, false),
+      },
+      splitLine: { lineStyle: { color: palette.value.grid } },
     },
     yAxis: [
       {
         type: 'value',
+        scale: true,
         position: 'left',
-        axisLabel: { color: 'var(--text-muted)' },
-        splitLine: { lineStyle: { color: 'var(--grid-color)' } },
+        axisLabel: { color: palette.value.muted },
+        splitLine: { lineStyle: { color: palette.value.grid } },
       },
       {
         type: 'value',
+        scale: true,
         position: 'right',
-        axisLabel: { color: 'var(--text-muted)' },
+        axisLabel: { color: palette.value.muted },
         splitLine: { show: false },
       },
     ],
     dataZoom: [
-      { type: 'inside', filterMode: 'none' },
+      {
+        type: 'inside',
+        filterMode: 'none',
+        start: view.zoom_start,
+        end: view.zoom_end,
+        startValue: zoomStartValue,
+        endValue: zoomEndValue,
+      },
       {
         type: 'slider',
+        filterMode: 'none',
+        start: view.zoom_start,
+        end: view.zoom_end,
+        startValue: zoomStartValue,
+        endValue: zoomEndValue,
         height: 18,
         bottom: 8,
-        borderColor: 'var(--border-color)',
-        backgroundColor: 'var(--panel-muted)',
-        fillerColor: 'var(--accent-soft)',
+        borderColor: palette.value.border,
+        backgroundColor: palette.value.panel,
+        fillerColor: palette.value.accentSoft,
       },
     ],
     series: visibleCurves.value.map((curve, index) => ({
@@ -118,7 +182,6 @@ const option = computed<EChartsOption>(() => {
       showSymbol: curve.show_symbol,
       symbolSize: 5,
       smooth: curve.smooth,
-      sampling: 'lttb',
       lineStyle: {
         color: curve.color,
         width: curve.line_width,
@@ -132,8 +195,8 @@ const option = computed<EChartsOption>(() => {
               silent: true,
               symbol: 'none',
               label: { show: false },
-              lineStyle: { color: 'var(--cursor-color)', width: 1 },
-              data: [{ xAxis: cursor }],
+              lineStyle: { color: palette.value.cursor, width: 1 },
+              data: [{ xAxis: toRelativeTime(cursor, timeOrigin.value) }],
             }
           : undefined,
     })),
@@ -151,8 +214,31 @@ async function load() {
 }
 
 function seekFromChart(params: { value?: unknown }) {
-  const timestamp = Array.isArray(params.value) ? params.value[0] : null
-  if (typeof timestamp === 'number') void server.seek(timestamp)
+  const relative = Array.isArray(params.value) ? params.value[0] : null
+  if (typeof relative === 'number') void server.seek(toAbsoluteTime(relative, timeOrigin.value))
+}
+
+function updateZoom(params: unknown) {
+  const payload = params as {
+    start?: number
+    end?: number
+    startValue?: number
+    endValue?: number
+    batch?: Array<{ start?: number; end?: number; startValue?: number; endValue?: number }>
+  }
+  const zoom = payload.batch?.[0] ?? payload
+  workspace.updateChartView(props.chart.id, {
+    zoom_start: zoom.start,
+    zoom_end: zoom.end,
+    zoom_start_value:
+      typeof zoom.startValue === 'number'
+        ? toAbsoluteTime(zoom.startValue, timeOrigin.value)
+        : undefined,
+    zoom_end_value:
+      typeof zoom.endValue === 'number'
+        ? toAbsoluteTime(zoom.endValue, timeOrigin.value)
+        : undefined,
+  })
 }
 
 onMounted(() => void load())
@@ -188,6 +274,13 @@ watch(
         <Trash2 class="h-3.5 w-3.5" />
       </button>
     </header>
-    <VChart class="min-h-0 flex-1" :option="option" autoresize @click="seekFromChart" />
+    <VChart
+      class="min-h-0 flex-1"
+      :option="option"
+      :update-options="{ notMerge: false, lazyUpdate: true }"
+      autoresize
+      @click="seekFromChart"
+      @datazoom="updateZoom"
+    />
   </article>
 </template>

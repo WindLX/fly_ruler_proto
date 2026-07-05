@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import { api, websocketUrl } from '@/api'
 import type {
+  AircraftEvent,
   AircraftSummary,
   OperationRecord,
   ServerStatus,
@@ -18,6 +19,8 @@ export const useServerStore = defineStore('server', () => {
   const sessions = ref<SessionSummary[]>([])
   const samples = ref<Record<string, TimestampedState>>({})
   const operations = ref<Record<string, OperationRecord>>({})
+  const timelineEvents = ref<AircraftEvent[]>([])
+  const timelineTruncated = ref(false)
   const error = ref<string | null>(null)
   const storeRevision = ref(0)
   const workspaceRevision = ref(0)
@@ -25,6 +28,17 @@ export const useServerStore = defineStore('server', () => {
   let reconnectTimer: number | null = null
 
   const playback = computed(() => status.value?.playback ?? null)
+
+  async function refreshTimeline(bounds = status.value?.playback.bounds ?? null) {
+    if (bounds) {
+      const events = await api.timelineEvents(bounds[0], bounds[1])
+      timelineEvents.value = events.items
+      timelineTruncated.value = events.total > events.items.length
+    } else {
+      timelineEvents.value = []
+      timelineTruncated.value = false
+    }
+  }
 
   async function refresh() {
     try {
@@ -36,6 +50,7 @@ export const useServerStore = defineStore('server', () => {
       status.value = nextStatus
       aircraft.value = nextAircraft.aircraft
       sessions.value = nextSessions.sessions
+      await refreshTimeline(nextStatus.playback.bounds)
       error.value = null
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : String(cause)
@@ -57,6 +72,7 @@ export const useServerStore = defineStore('server', () => {
         | { type: 'store_changed'; reason: string }
         | { type: 'workspace_changed'; revision: number }
       if (message.type === 'snapshot') {
+        const previousEventCount = status.value?.store.event_count
         status.value = status.value
           ? { ...status.value, playback: message.playback, store: message.store }
           : null
@@ -65,6 +81,9 @@ export const useServerStore = defineStore('server', () => {
           next[id] = aircraftSnapshot.sample
         }
         samples.value = next
+        if (previousEventCount !== message.store.event_count) {
+          void refreshTimeline(message.playback.bounds)
+        }
       } else if (message.type === 'operation_status') {
         operations.value = { ...operations.value, [message.operation.id]: message.operation }
         if (message.operation.state === 'succeeded' || message.operation.state === 'failed') {
@@ -119,11 +138,14 @@ export const useServerStore = defineStore('server', () => {
     sessions,
     samples,
     operations,
+    timelineEvents,
+    timelineTruncated,
     error,
     playback,
     storeRevision,
     workspaceRevision,
     refresh,
+    refreshTimeline,
     connect,
     stop,
     setLive,

@@ -1,28 +1,22 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { Eye, EyeOff, Trash2 } from 'lucide-vue-next'
 
-import { api } from '@/api'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { AircraftEvent } from '@/types'
+import { formatAbsoluteTime, formatRelativeTime } from '@/utils'
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
 const chart = computed(() => workspace.selectedChart)
-const events = ref<AircraftEvent[]>([])
+const events = computed(() => {
+  const id = workspace.workspace.selected_aircraft_id
+  return id ? server.timelineEvents.filter((event) => event.aircraft_id === id) : []
+})
 const sample = computed(() => {
   const id = workspace.workspace.selected_aircraft_id
   return id ? server.samples[id] : null
 })
-
-watch(
-  [() => workspace.workspace.selected_aircraft_id, () => server.storeRevision],
-  async ([id]) => {
-    events.value = id ? (await api.aircraftEvents(id)).items : []
-  },
-  { immediate: true },
-)
 </script>
 
 <template>
@@ -32,7 +26,14 @@ watch(
     <section class="border-b border-(--border-color) p-3">
       <h2 class="tool-label">Current state</h2>
       <div v-if="sample" class="mt-2 space-y-2 text-xs">
-        <div class="mono text-(--text-muted)">t = {{ sample.timestamp_secs.toFixed(6) }}</div>
+        <div class="mono text-(--text-muted)">
+          {{
+            formatRelativeTime(
+              sample.timestamp_secs - (server.playback?.bounds?.[0] ?? sample.timestamp_secs),
+            )
+          }}
+          · {{ formatAbsoluteTime(sample.timestamp_secs, workspace.workspace.locale) }}
+        </div>
         <pre class="state-json scrollbar-thin">{{ JSON.stringify(sample.state, null, 2) }}</pre>
       </div>
       <p v-else class="mt-2 text-xs text-(--text-muted)">No selected aircraft sample.</p>
@@ -46,7 +47,11 @@ watch(
           :key="`${event.timestamp_secs}:${event.event_type}`"
           class="flex gap-2 rounded border border-(--border-color) bg-(--card-bg) px-2 py-1.5 text-xs"
         >
-          <span class="mono text-(--text-muted)">{{ event.timestamp_secs.toFixed(3) }}</span>
+          <span class="mono text-(--text-muted)">{{
+            formatRelativeTime(
+              event.timestamp_secs - (server.playback?.bounds?.[0] ?? event.timestamp_secs),
+            )
+          }}</span>
           <strong>{{ event.event_type }}</strong>
           <span class="min-w-0 truncate text-(--text-secondary)">{{
             event.name ?? event.reason ?? ''

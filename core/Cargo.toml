@@ -28,11 +28,11 @@ uuid = { version = "1.23.0", features = ["v4"] }
 axum = { version = "0.8.9", features = ["json", "ws"] }
 base64 = "0.22.1"
 tower-http = { version = "0.6.11", features = ["cors", "trace", "fs"] }
+tower = { version = "0.5.3", features = ["util"] }
 
 [dev-dependencies]
 criterion = "0.8.2"
 tokio-test = "0.4.5"
-tower = { version = "0.5.3", features = ["util"] }
 tokio-tungstenite = { version = "0.29.0", features = ["connect"] }
 
 [build-dependencies]

@@ -162,3 +162,33 @@ select {
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
 }
+
+.timeline-track {
+  touch-action: none;
+}
+
+.timeline-event {
+  display: flex;
+  min-width: 0.75rem;
+  height: 0.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--panel-bg);
+  border-radius: 9999px;
+  color: white;
+  font-size: 0.52rem;
+  line-height: 1;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 18%);
+}
+
+.timeline-event-spawn {
+  background: #22a06b;
+}
+
+.timeline-event-despawn {
+  background: #e35d6a;
+}
+
+.timeline-event-custom {
+  background: #d69e2e;
+}

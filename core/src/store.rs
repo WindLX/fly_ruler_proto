@@ -67,6 +67,17 @@ pub struct TimestampedEvent {
     pub event: Event,
 }
 
+/// A lifecycle/custom event paired with its aircraft identifier.
+#[derive(Debug, Clone)]
+pub struct GlobalTimestampedEvent {
+    /// Aircraft that emitted the event.
+    pub aircraft_id: AircraftId,
+    /// Event timestamp in seconds.
+    pub timestamp_secs: f64,
+    /// Stored event payload.
+    pub event: Event,
+}
+
 /// Time-series data for one aircraft.
 #[derive(Debug, Clone, Default)]
 pub struct AircraftTimeSeries {
@@ -438,6 +449,52 @@ impl TimeSeriesStore {
                 .partition_point(|event| event.timestamp_secs <= end);
             page_slice(&series.events[first..last], offset, limit)
         })
+    }
+
+    /// Return a globally sorted page of events across all aircraft.
+    ///
+    /// Equal timestamps are ordered by aircraft ID and then by their original
+    /// per-aircraft insertion order, providing deterministic replay markers.
+    pub fn get_global_events_page(
+        &self,
+        start: f64,
+        end: f64,
+        offset: usize,
+        limit: usize,
+    ) -> StorePage<GlobalTimestampedEvent> {
+        let data = read_unpoisoned(&self.data);
+        let mut aircraft_ids = data
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        aircraft_ids.sort();
+        let mut events = Vec::new();
+        for aircraft_id in aircraft_ids {
+            let Some(series) = data.get(&aircraft_id) else {
+                continue;
+            };
+            let first = series
+                .events
+                .partition_point(|event| event.timestamp_secs < start);
+            let last = series
+                .events
+                .partition_point(|event| event.timestamp_secs <= end);
+            events.extend(
+                series.events[first..last]
+                    .iter()
+                    .map(|entry| GlobalTimestampedEvent {
+                        aircraft_id: aircraft_id.clone(),
+                        timestamp_secs: entry.timestamp_secs,
+                        event: entry.event.clone(),
+                    }),
+            );
+        }
+        events.sort_by(|left, right| {
+            left.timestamp_secs
+                .total_cmp(&right.timestamp_secs)
+                .then_with(|| left.aircraft_id.cmp(&right.aircraft_id))
+        });
+        page_slice(&events, offset, limit)
     }
 
     /// Return all aircraft IDs currently in the store, sorted.
@@ -1006,6 +1063,23 @@ mod tests {
         assert_eq!(page.total, 4);
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].timestamp_secs, 2.0);
+    }
+
+    #[test]
+    fn global_event_page_is_sorted_and_paginated() {
+        let store = TimeSeriesStore::new();
+        store.append_event("b".to_string(), 2.0, Event::Custom("b2".to_string()));
+        store.append_event("a".to_string(), 1.0, Event::Custom("a1".to_string()));
+        store.append_event("b".to_string(), 1.0, Event::Custom("b1".to_string()));
+        store.append_event("a".to_string(), 3.0, Event::Custom("a3".to_string()));
+
+        let page = store.get_global_events_page(1.0, 3.0, 1, 2);
+        assert_eq!(page.total, 4);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].aircraft_id, "b");
+        assert_eq!(page.items[0].timestamp_secs, 1.0);
+        assert_eq!(page.items[1].aircraft_id, "b");
+        assert_eq!(page.items[1].timestamp_secs, 2.0);
     }
 
     #[test]

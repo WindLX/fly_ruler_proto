@@ -72,6 +72,7 @@ export interface TimestampedState {
 }
 
 export interface AircraftEvent {
+  aircraft_id?: string
   timestamp_secs: number
   event_type: 'spawn' | 'despawn' | 'custom'
   name?: string

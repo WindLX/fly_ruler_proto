@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { CirclePause, CirclePlay, Radio, RefreshCw } from 'lucide-vue-next'
+import {
+  CirclePause,
+  CirclePlay,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Radio,
+  RefreshCw,
+} from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { formatAbsoluteTime, formatRelativeTime } from '@/utils'
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
@@ -58,10 +68,38 @@ function toggleLocale() {
       </option>
     </select>
     <span class="mono ml-2 text-xs text-(--text-muted)">
-      {{ playback?.cursor_secs?.toFixed(3) ?? '—' }}
+      {{
+        playback?.cursor_secs === null || playback?.cursor_secs === undefined
+          ? '—'
+          : formatRelativeTime(
+              playback.cursor_secs - (playback.bounds?.[0] ?? playback.cursor_secs),
+            )
+      }}
       · {{ playback?.mode ?? 'offline' }}
     </span>
+    <span
+      v-if="playback?.cursor_secs !== null && playback?.cursor_secs !== undefined"
+      class="hidden text-xs text-(--text-muted) xl:inline"
+    >
+      {{ formatAbsoluteTime(playback.cursor_secs, workspace.workspace.locale) }}
+    </span>
     <div class="ml-auto flex items-center gap-2">
+      <button
+        class="icon-button"
+        :title="workspace.workspace.left_panel_open ? 'Hide left panel' : 'Show left panel'"
+        @click="workspace.workspace.left_panel_open = !workspace.workspace.left_panel_open"
+      >
+        <PanelLeftClose v-if="workspace.workspace.left_panel_open" class="h-4 w-4" />
+        <PanelLeftOpen v-else class="h-4 w-4" />
+      </button>
+      <button
+        class="icon-button"
+        :title="workspace.workspace.right_panel_open ? 'Hide right panel' : 'Show right panel'"
+        @click="workspace.workspace.right_panel_open = !workspace.workspace.right_panel_open"
+      >
+        <PanelRightClose v-if="workspace.workspace.right_panel_open" class="h-4 w-4" />
+        <PanelRightOpen v-else class="h-4 w-4" />
+      </button>
       <button class="toolbar-button" @click="server.refresh"><RefreshCw class="h-4 w-4" /></button>
       <button class="toolbar-button" @click="toggleLocale">
         {{ locale === 'zh-CN' ? 'EN' : '中' }}

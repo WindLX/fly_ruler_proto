@@ -10,6 +10,7 @@ import type {
   WorkspaceDocument,
   WorkspaceSnapshot,
 } from '@/types'
+import { resolveWebSocketUrl, runtimeConfig } from '@/runtime'
 
 interface ApiErrorBody {
   code?: string
@@ -18,7 +19,7 @@ interface ApiErrorBody {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(`${runtimeConfig.api_base_url}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -39,6 +40,10 @@ export const api = {
   aircraftEvents: (aircraftId: string) =>
     apiFetch<{ items: AircraftEvent[]; total: number }>(
       `/aircraft/${encodeURIComponent(aircraftId)}/events?offset=0&limit=100`,
+    ),
+  timelineEvents: (start: number, end: number, offset = 0, limit = 10_000) =>
+    apiFetch<{ items: AircraftEvent[]; total: number; offset: number; limit: number }>(
+      `/timeline/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&offset=${offset}&limit=${limit}`,
     ),
   playback: () => apiFetch<ServerStatus['playback']>('/playback'),
   live: () => apiFetch<ServerStatus['playback']>('/playback/live', { method: 'POST' }),
@@ -100,6 +105,5 @@ export const api = {
 }
 
 export function websocketUrl(): string {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${location.host}/api/v1/ws`
+  return resolveWebSocketUrl(runtimeConfig.websocket_url)
 }

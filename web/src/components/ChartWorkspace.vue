@@ -1,21 +1,36 @@
 <script setup lang="ts">
 import { BarChart3, Layers3, Plus } from 'lucide-vue-next'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { GridItem, GridLayout } from 'vue3-grid-layout-next'
 
 import { useWorkspaceStore } from '@/stores/workspace'
 import ChartCard from '@/components/ChartCard.vue'
 
 const workspace = useWorkspaceStore()
-const layout = computed(() =>
-  workspace.workspace.charts.map((chart) => ({
-    i: chart.id,
-    x: chart.x,
-    y: chart.y,
-    w: chart.w,
-    h: chart.h,
-  })),
+type LayoutItem = { i: string; x: number; y: number; w: number; h: number }
+const layout = ref<LayoutItem[]>([])
+const chartById = computed(
+  () => new Map(workspace.workspace.charts.map((chart) => [chart.id, chart])),
 )
+
+watch(
+  () =>
+    workspace.workspace.charts.map((chart) => ({
+      i: chart.id,
+      x: chart.x,
+      y: chart.y,
+      w: chart.w,
+      h: chart.h,
+    })),
+  (next) => {
+    layout.value = next
+  },
+  { deep: true, immediate: true },
+)
+
+function commitLayout(next: LayoutItem[]) {
+  workspace.updateLayout(next)
+}
 </script>
 
 <template>
@@ -54,7 +69,7 @@ const layout = computed(() =>
 
     <GridLayout
       v-else
-      :layout="layout"
+      v-model:layout="layout"
       :col-num="12"
       :row-height="72"
       :margin="[12, 12]"
@@ -62,20 +77,20 @@ const layout = computed(() =>
       :is-resizable="true"
       :vertical-compact="true"
       draggable-handle=".chart-drag-handle"
-      @layout-updated="workspace.updateLayout"
+      @layout-updated="commitLayout"
     >
       <GridItem
-        v-for="chart in workspace.workspace.charts"
-        :key="chart.id"
-        :i="chart.id"
-        :x="chart.x"
-        :y="chart.y"
-        :w="chart.w"
-        :h="chart.h"
+        v-for="item in layout"
+        :key="item.i"
+        :i="item.i"
+        :x="item.x"
+        :y="item.y"
+        :w="item.w"
+        :h="item.h"
         :min-w="3"
         :min-h="3"
       >
-        <ChartCard :chart="chart" />
+        <ChartCard v-if="chartById.get(item.i)" :chart="chartById.get(item.i)!" />
       </GridItem>
     </GridLayout>
   </main>

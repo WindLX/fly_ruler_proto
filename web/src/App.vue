@@ -51,7 +51,7 @@ watch(
 watch(
   () => server.workspaceRevision,
   (revision) => {
-    if (revision > workspace.revision && !workspace.saving) void workspace.load()
+    workspace.handleRemoteRevision(revision)
   },
 )
 

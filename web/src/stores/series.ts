@@ -43,9 +43,21 @@ export const useSeriesStore = defineStore('series', () => {
   }
 
   function appendLive(curve: CurveStyle, timestamp: number, value: number, maxPoints: number) {
+    if (!Number.isFinite(timestamp) || !Number.isFinite(value)) return
     const key = curveKey(curve)
     const existing = data.value[key]
-    const points = [...(existing?.points ?? []), [timestamp, value] as [number, number]]
+    const points = [...(existing?.points ?? [])]
+    const next: [number, number] = [timestamp, value]
+    const last = points[points.length - 1]
+    if (!last || timestamp > last[0]) {
+      points.push(next)
+    } else if (timestamp === last[0]) {
+      points[points.length - 1] = next
+    } else {
+      const index = points.findIndex(([time]) => time >= timestamp)
+      if (index >= 0 && points[index]?.[0] === timestamp) points[index] = next
+      else points.splice(index < 0 ? points.length : index, 0, next)
+    }
     if (points.length > maxPoints) points.splice(0, points.length - maxPoints)
     data.value = {
       ...data.value,
@@ -54,7 +66,7 @@ export const useSeriesStore = defineStore('series', () => {
         aircraft_id: curve.aircraft_id,
         selector: curve.selector,
         points,
-        total_points: (existing?.total_points ?? 0) + 1,
+        total_points: Math.max(existing?.total_points ?? 0, points.length),
         returned_points: points.length,
       },
     }

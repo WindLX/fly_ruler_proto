@@ -5,14 +5,17 @@ import { api } from '@/api'
 import type { ChartModel, CurveStyle, WorkspaceSnapshot } from '@/types'
 import { curveKey, defaultWorkspace } from '@/utils'
 
-let saveTimer: number | null = null
-
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<WorkspaceSnapshot>(defaultWorkspace())
   const revision = ref(0)
   const hydrated = ref(false)
   const saving = ref(false)
   let applyingRemote = false
+  let saveTimer: number | null = null
+  const localGeneration = ref(0)
+  const savedGeneration = ref(0)
+  let pendingRemoteRevision = 0
+  const dirty = computed(() => localGeneration.value !== savedGeneration.value)
   const selectedChart = computed(
     () =>
       workspace.value.charts.find((chart) => chart.id === workspace.value.selected_chart_id) ??
@@ -28,24 +31,47 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     hydrated.value = true
     await nextTick()
+    localGeneration.value = 0
+    savedGeneration.value = 0
     applyingRemote = false
   }
 
   async function save() {
-    if (!hydrated.value || applyingRemote) return
+    if (!hydrated.value || applyingRemote || saving.value || !dirty.value) return
     saving.value = true
     try {
-      const response = await api.saveWorkspace(workspace.value)
-      revision.value = response.workspace.revision
+      while (savedGeneration.value !== localGeneration.value) {
+        const generation = localGeneration.value
+        const snapshot = JSON.parse(JSON.stringify(workspace.value)) as WorkspaceSnapshot
+        const response = await api.saveWorkspace(snapshot)
+        revision.value = response.workspace.revision
+        savedGeneration.value = generation
+      }
     } finally {
       saving.value = false
+    }
+    if (pendingRemoteRevision > revision.value && !dirty.value) {
+      pendingRemoteRevision = 0
+      await load()
+    } else {
+      pendingRemoteRevision = 0
     }
   }
 
   function scheduleSave() {
     if (!hydrated.value || applyingRemote) return
+    localGeneration.value++
     if (saveTimer !== null) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(() => void save(), 600)
+  }
+
+  function handleRemoteRevision(nextRevision: number) {
+    if (nextRevision <= revision.value) return
+    pendingRemoteRevision = Math.max(pendingRemoteRevision, nextRevision)
+    if (!saving.value && !dirty.value) {
+      pendingRemoteRevision = 0
+      void load()
+    }
   }
 
   function selectAircraft(id: string | null) {
@@ -101,6 +127,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  function updateChartView(
+    chartId: string,
+    view: ChartModel['view'],
+    synchronize = workspace.value.sync_charts,
+  ) {
+    const chart = workspace.value.charts.find((item) => item.id === chartId)
+    if (!chart) return
+    if (!sameChartView(chart.view, view)) chart.view = { ...view }
+    if (synchronize) {
+      for (const other of workspace.value.charts) {
+        if (other.id !== chartId && !sameChartView(other.view, view)) other.view = { ...view }
+      }
+    }
+  }
+
   watch(workspace, scheduleSave, { deep: true })
 
   return {
@@ -108,14 +149,31 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     revision,
     hydrated,
     saving,
+    dirty,
     selectedChart,
     load,
     save,
+    handleRemoteRevision,
     selectAircraft,
     addToBasket,
     createChart,
     addBasketToSelected,
     removeChart,
     updateLayout,
+    updateChartView,
   }
 })
+
+function sameChartView(left: ChartModel['view'], right: ChartModel['view']): boolean {
+  return (
+    sameOptionalNumber(left.zoom_start, right.zoom_start) &&
+    sameOptionalNumber(left.zoom_end, right.zoom_end) &&
+    sameOptionalNumber(left.zoom_start_value, right.zoom_start_value) &&
+    sameOptionalNumber(left.zoom_end_value, right.zoom_end_value)
+  )
+}
+
+function sameOptionalNumber(left: number | undefined, right: number | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return Math.abs(left - right) <= 1e-6
+}
