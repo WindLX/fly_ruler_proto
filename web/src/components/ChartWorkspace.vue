@@ -60,7 +60,7 @@ function sameLayout(
 </script>
 
 <template>
-  <main class="relative min-h-0 min-w-0 flex-1 overflow-auto">
+  <main class="chart-workspace">
     <div v-if="workspace.workspace.basket.length" class="basket-bar">
       <Layers3 class="h-4 w-4 text-(--accent)" />
       <span class="text-xs font-semibold">
@@ -69,15 +69,15 @@ function sameLayout(
       <span
         v-for="curve in workspace.workspace.basket"
         :key="`${curve.aircraft_id}:${curve.alias}`"
-        class="rounded-full bg-(--accent-soft) px-2 py-1 text-[11px]"
+        class="curve-chip"
       >
         {{ curve.alias }}
       </span>
       <div class="ml-auto flex gap-2">
-        <button class="toolbar-button" @click="workspace.addBasketToSelected(nextChartTitle())">
+        <button class="editor-button" @click="workspace.addBasketToSelected(nextChartTitle())">
           {{ t('chart.addToChart') }}
         </button>
-        <button class="toolbar-button" @click="workspace.createChart(nextChartTitle())">
+        <button class="editor-button" @click="workspace.createChart(nextChartTitle())">
           <Plus class="h-3.5 w-3.5" />{{ t('chart.new') }}
         </button>
       </div>
@@ -89,7 +89,7 @@ function sameLayout(
     >
       <BarChart3 class="h-12 w-12 opacity-50" />
       <p class="text-sm">{{ t('chart.emptyHint') }}</p>
-      <button class="toolbar-button" @click="workspace.createChart(nextChartTitle())">
+      <button class="editor-button" @click="workspace.createChart(nextChartTitle())">
         <Plus class="h-4 w-4" />{{ t('chart.new') }}
       </button>
     </div>
@@ -99,7 +99,7 @@ function sameLayout(
       v-model:layout="layout"
       :col-num="12"
       :row-height="72"
-      :margin="[12, 12]"
+      :margin="[3, 3]"
       :is-draggable="true"
       :is-resizable="true"
       :vertical-compact="true"

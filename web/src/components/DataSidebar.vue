@@ -16,6 +16,7 @@ const { t, te } = useI18n()
 const sessionName = ref('flight')
 const sessionBusy = ref(false)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
+const confirmOpen = ref(false)
 const selectedAircraft = computed(() => workspace.workspace.selected_aircraft_id)
 const catalog = computed(() =>
   selectedAircraft.value ? (series.catalogs[selectedAircraft.value] ?? []) : [],
@@ -50,12 +51,20 @@ async function loadSession(name: string) {
 }
 
 async function clearMemory() {
-  if (!window.confirm(t('sessions.clearConfirm'))) return
+  confirmOpen.value = true
+}
+
+async function confirmClearMemory() {
+  confirmOpen.value = false
   await runSessionAction(async () => {
     await api.clear()
     await server.refresh()
     return t('sessions.cleared')
   })
+}
+
+function cancelClearMemory() {
+  confirmOpen.value = false
 }
 
 async function runSessionAction(action: () => Promise<string>) {
@@ -96,16 +105,14 @@ function addField(field: (typeof catalog.value)[number], index: number) {
 </script>
 
 <template>
-  <aside
-    class="panel-surface flex min-h-0 w-78 shrink-0 scrollbar-thin flex-col overflow-y-auto rounded-lg"
-  >
-    <section class="border-b border-(--border-color) p-3">
-      <h2 class="section-title">{{ t('sidebar.aircraft') }}</h2>
-      <div class="mt-2 space-y-2">
+  <aside class="editor-panel left-sidebar scrollbar-thin">
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('sidebar.aircraft') }}</h2>
+      <div class="editor-section-body">
         <button
           v-for="item in server.aircraft"
           :key="item.id"
-          class="data-card w-full px-3 py-2 text-left"
+          class="data-card"
           :class="
             item.id === selectedAircraft
               ? 'border-(--accent) bg-(--accent-soft)'
@@ -113,9 +120,9 @@ function addField(field: (typeof catalog.value)[number], index: number) {
           "
           @click="workspace.selectAircraft(item.id)"
         >
-          <div class="truncate text-sm font-semibold">{{ item.name || item.id }}</div>
-          <div class="mono mt-1 truncate text-[11px] text-(--text-muted)">{{ item.id }}</div>
-          <div class="mt-1 text-xs text-(--text-secondary)">
+          <div class="truncate font-semibold">{{ item.name || item.id }}</div>
+          <div class="mono truncate text-[10px] text-(--text-muted)">{{ item.id }}</div>
+          <div class="text-[11px] text-(--text-secondary)">
             {{
               t('sidebar.statesAndEvents', {
                 states: item.state_count,
@@ -130,9 +137,9 @@ function addField(field: (typeof catalog.value)[number], index: number) {
       </div>
     </section>
 
-    <section class="border-b border-(--border-color) p-3">
-      <h2 class="section-title">{{ t('sidebar.fields') }}</h2>
-      <div v-if="selectedAircraft" class="mt-2 space-y-2">
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('sidebar.fields') }}</h2>
+      <div v-if="selectedAircraft" class="editor-section-body catalog-body">
         <details v-for="(fields, group) in grouped" :key="group" open class="catalog-group">
           <summary class="catalog-summary">
             {{ groupLabel(String(group)) }}
@@ -149,46 +156,72 @@ function addField(field: (typeof catalog.value)[number], index: number) {
           </button>
         </details>
       </div>
-      <p v-else class="mt-3 text-xs text-(--text-muted)">{{ t('app.noData') }}</p>
+      <p v-else class="empty-copy">{{ t('app.noData') }}</p>
     </section>
 
-    <section class="p-3">
-      <h2 class="section-title">{{ t('sessions.title') }}</h2>
-      <div class="mt-2 flex gap-2">
-        <input
-          v-model="sessionName"
-          class="toolbar-input min-w-0 flex-1"
-          :placeholder="t('sessions.namePlaceholder')"
-        />
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('sessions.title') }}</h2>
+      <div class="editor-section-body">
+        <div class="flex gap-1">
+          <input
+            v-model="sessionName"
+            class="editor-input min-w-0 flex-1"
+            :placeholder="t('sessions.namePlaceholder')"
+          />
+          <button
+            class="editor-icon-button"
+            :disabled="sessionBusy"
+            :title="t('sessions.saveTitle')"
+            @click="saveSession"
+          >
+            <Save class="h-4 w-4" />
+          </button>
+        </div>
         <button
-          class="icon-button"
+          v-for="item in server.sessions"
+          :key="item.name"
+          class="session-row"
           :disabled="sessionBusy"
-          :title="t('sessions.saveTitle')"
-          @click="saveSession"
+          @click="loadSession(item.name)"
         >
-          <Save class="h-4 w-4" />
+          <Database class="h-4 w-4" /><span class="flex-1 truncate">{{ item.name }}</span>
+          <Upload class="h-3.5 w-3.5" />
         </button>
+        <p
+          v-if="notice"
+          class="notice"
+          :class="notice.kind === 'error' ? 'notice-error' : 'notice-success'"
+        >
+          {{ notice.text }}
+        </p>
+        <button class="danger-button w-full" :disabled="sessionBusy" @click="clearMemory">
+          <Trash2 class="h-4 w-4" />{{ t('sessions.clear') }}
+        </button>
+
+        <div
+          v-if="confirmOpen"
+          class="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('sessions.clearConfirmTitle')"
+          @click="cancelClearMemory"
+        >
+          <div class="editor-dialog" @click.stop>
+            <h3 class="text-sm font-semibold text-(--text-primary)">
+              {{ t('sessions.clearConfirmTitle') }}
+            </h3>
+            <p class="mt-2 text-xs text-(--text-secondary)">{{ t('sessions.clearConfirm') }}</p>
+            <div class="mt-4 flex justify-end gap-1">
+              <button class="editor-button" @click="cancelClearMemory">
+                {{ t('common.cancel') }}
+              </button>
+              <button class="danger-button" @click="confirmClearMemory">
+                <Trash2 class="h-4 w-4" />{{ t('sessions.clear') }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-      <button
-        v-for="item in server.sessions"
-        :key="item.name"
-        class="session-row"
-        :disabled="sessionBusy"
-        @click="loadSession(item.name)"
-      >
-        <Database class="h-4 w-4" /><span class="flex-1 truncate">{{ item.name }}</span>
-        <Upload class="h-3.5 w-3.5" />
-      </button>
-      <p
-        v-if="notice"
-        class="notice mt-3"
-        :class="notice.kind === 'error' ? 'notice-error' : 'notice-success'"
-      >
-        {{ notice.text }}
-      </p>
-      <button class="danger-button mt-3 w-full" :disabled="sessionBusy" @click="clearMemory">
-        <Trash2 class="h-4 w-4" />{{ t('sessions.clear') }}
-      </button>
     </section>
   </aside>
 </template>

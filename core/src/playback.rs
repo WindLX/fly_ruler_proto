@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::config::ReplayConfig;
@@ -19,6 +19,26 @@ pub enum PlaybackMode {
     ReplayPaused,
     /// Advance the historical cursor using wall-clock time.
     ReplayPlaying,
+}
+
+/// Timeline entry type used by frame stepping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackStepUnit {
+    /// Globally unique aircraft state timestamps.
+    Sample,
+    /// Globally unique lifecycle and custom-event timestamps.
+    Event,
+}
+
+/// Direction used by frame stepping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackStepDirection {
+    /// Move to an earlier timeline entry.
+    Previous,
+    /// Move to a later timeline entry.
+    Next,
 }
 
 /// Serializable playback state exposed to bindings and management clients.
@@ -62,6 +82,9 @@ pub enum PlaybackError {
         /// Maximum accepted speed.
         max: f64,
     },
+    /// A frame step count must be bounded to prevent expensive requests.
+    #[error("step count must be within 1..=100")]
+    InvalidStepCount,
 }
 
 #[derive(Debug)]
@@ -177,6 +200,41 @@ impl PlaybackController {
         }
         inner.revision = inner.revision.wrapping_add(1);
         Ok(snapshot_from_inner(&inner, bounds))
+    }
+
+    /// Pause and move to an adjacent globally unique sample or event timestamp.
+    pub fn step(
+        &self,
+        unit: PlaybackStepUnit,
+        direction: PlaybackStepDirection,
+        count: usize,
+    ) -> Result<PlaybackSnapshot, PlaybackError> {
+        if !(1..=100).contains(&count) {
+            return Err(PlaybackError::InvalidStepCount);
+        }
+        let bounds = active_time_bounds(&self.store).ok_or(PlaybackError::EmptyStore)?;
+        let mut inner = lock_unpoisoned(&self.inner);
+        update_effective_cursor(&mut inner, Some(bounds));
+        let cursor = inner.cursor_secs.unwrap_or(bounds.1);
+        let target = match (unit, direction) {
+            (PlaybackStepUnit::Sample, PlaybackStepDirection::Previous) => {
+                self.store.previous_global_state_timestamp(cursor, count)
+            }
+            (PlaybackStepUnit::Sample, PlaybackStepDirection::Next) => {
+                self.store.next_global_state_timestamp(cursor, count)
+            }
+            (PlaybackStepUnit::Event, PlaybackStepDirection::Previous) => {
+                self.store.previous_global_event_timestamp(cursor, count)
+            }
+            (PlaybackStepUnit::Event, PlaybackStepDirection::Next) => {
+                self.store.next_global_event_timestamp(cursor, count)
+            }
+        };
+        inner.mode = PlaybackMode::ReplayPaused;
+        inner.cursor_secs = Some(target.unwrap_or(cursor).clamp(bounds.0, bounds.1));
+        inner.anchor = None;
+        inner.revision = inner.revision.wrapping_add(1);
+        Ok(snapshot_from_inner(&inner, Some(bounds)))
     }
 
     /// Reset after clearing all data.
@@ -395,5 +453,60 @@ mod tests {
                 .timestamp_secs,
             30.0
         );
+    }
+
+    #[test]
+    fn stepping_uses_global_unique_samples_and_events() {
+        let store = Arc::new(TimeSeriesStore::new());
+        store.append_state("a".to_string(), 10.0, state(1.0));
+        store.append_state("a".to_string(), 20.0, state(2.0));
+        store.append_state("b".to_string(), 20.0, state(3.0));
+        store.append_state("b".to_string(), 30.0, state(4.0));
+        store.append_event(
+            "a".to_string(),
+            12.0,
+            crate::store::Event::Custom("one".to_string()),
+        );
+        store.append_event(
+            "b".to_string(),
+            24.0,
+            crate::store::Event::Custom("two".to_string()),
+        );
+        let playback = PlaybackController::new(store, ReplayConfig::default());
+
+        let previous = playback
+            .step(PlaybackStepUnit::Sample, PlaybackStepDirection::Previous, 1)
+            .unwrap();
+        assert_eq!(previous.cursor_secs, Some(20.0));
+        let earliest = playback
+            .step(
+                PlaybackStepUnit::Sample,
+                PlaybackStepDirection::Previous,
+                10,
+            )
+            .unwrap();
+        assert_eq!(earliest.cursor_secs, Some(10.0));
+        let event = playback
+            .step(PlaybackStepUnit::Event, PlaybackStepDirection::Next, 1)
+            .unwrap();
+        assert_eq!(event.cursor_secs, Some(12.0));
+    }
+
+    #[test]
+    fn step_validates_count_and_increments_revision_at_boundaries() {
+        let playback = controller();
+        assert_eq!(
+            playback
+                .step(PlaybackStepUnit::Sample, PlaybackStepDirection::Next, 0,)
+                .unwrap_err(),
+            PlaybackError::InvalidStepCount
+        );
+        let initial = playback.snapshot();
+        let boundary = playback
+            .step(PlaybackStepUnit::Sample, PlaybackStepDirection::Next, 1)
+            .unwrap();
+        assert_eq!(boundary.cursor_secs, initial.cursor_secs);
+        assert_eq!(boundary.mode, PlaybackMode::ReplayPaused);
+        assert!(boundary.revision > initial.revision);
     }
 }

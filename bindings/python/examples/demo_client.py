@@ -53,7 +53,7 @@ def build_state(elapsed_s: float, cfg: MotionConfig):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FlyRuler demo simulator client")
     parser.add_argument(
-        "--address", default="127.0.0.1:8080", help="FlyRuler UDP server address"
+        "--address", default="127.0.0.1:18002", help="FlyRuler UDP server address"
     )
     parser.add_argument("--name", default="DemoAircraft", help="Aircraft display name")
     parser.add_argument("--hz", type=float, default=30.0, help="State update frequency")

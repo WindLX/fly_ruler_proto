@@ -420,7 +420,7 @@ build-backend = "maturin"
 
 [project]
 name = "fly_ruler_proto_python"
-version = "0.2.0"
+version = "0.2.1"
 requires-python = ">=3.10"
 ```
 

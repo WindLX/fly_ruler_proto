@@ -42,7 +42,7 @@ class FlyRulerClient:
     """One client bound to one aircraft lifecycle.
 
     Example:
-        with FlyRulerClient("127.0.0.1:8080", "F-16") as aircraft:
+        with FlyRulerClient("127.0.0.1:18002", "F-16") as aircraft:
             aircraft.update_state(create_aircraft_state(position=(100.0, 0.0, -1000.0)))
             aircraft.create_event("missile_launch")
 

@@ -37,7 +37,8 @@ pub use management::{
     IngestionGate, ManagementError, ManagementServerRuntime, OperationRecord, OperationState,
 };
 pub use playback::{
-    PlaybackController, PlaybackError, PlaybackMode, PlaybackSnapshot, ResolvedState,
+    PlaybackController, PlaybackError, PlaybackMode, PlaybackSnapshot, PlaybackStepDirection,
+    PlaybackStepUnit, ResolvedState,
 };
 pub use store::{
     AircraftConfig, AircraftId, AircraftSummary, AircraftTimeSeries, Event, StoreError, StorePage,

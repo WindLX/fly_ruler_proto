@@ -191,6 +191,64 @@ export function niceTickStep(span: number, targetTicks = 8): number {
   return nice * magnitude
 }
 
+export interface TimelineTick {
+  value: number
+  level: 'major' | 'minor'
+  label: string | null
+}
+
+const TIMELINE_STEPS = [
+  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900,
+  1_800, 3_600, 7_200, 10_800, 21_600, 43_200, 86_400,
+]
+
+export function timelineTickStep(span: number, width: number, minLabelSpacing = 84): number {
+  if (!Number.isFinite(span) || span <= 0 || !Number.isFinite(width) || width <= 0) return 1
+  const target = Math.max(2, Math.ceil(width / minLabelSpacing))
+  const raw = span / target
+  const fixed = TIMELINE_STEPS.find((step) => step >= raw)
+  if (fixed !== undefined) return fixed
+  const days = raw / 86_400
+  return niceTickStep(days, 1) * 86_400
+}
+
+export function generateTimelineTicks(
+  span: number,
+  width: number,
+  minLabelSpacing = 84,
+): TimelineTick[] {
+  if (!Number.isFinite(span) || span <= 0 || !Number.isFinite(width) || width <= 0) return []
+  const major = timelineTickStep(span, width, minLabelSpacing)
+  const divisions = minorTickDivisions(major)
+  const minor = major / divisions
+  const ticks: TimelineTick[] = []
+  const epsilon = minor * 1e-6
+  const count = Math.min(2_000, Math.floor(span / minor) + 1)
+  for (let index = 0; index <= count; index++) {
+    const value = index * minor
+    if (value > span + epsilon) break
+    const isMajor = index % divisions === 0
+    const pixel = (value / span) * width
+    const showLabel = isMajor && pixel >= 34 && pixel <= width - 34
+    ticks.push({
+      value,
+      level: isMajor ? 'major' : 'minor',
+      label: showLabel ? formatRelativeTime(value, major < 1) : null,
+    })
+  }
+  return ticks
+}
+
+function minorTickDivisions(step: number): number {
+  const seconds = step < 1 ? step * 1_000 : step
+  const normalized = seconds / 10 ** Math.floor(Math.log10(seconds))
+  if (Math.abs(normalized - 2) < 1e-9) return 4
+  if (Math.abs(normalized - 1.5) < 1e-9 || step === 15 || step === 900) return 3
+  if (step === 30 || step === 60 || step === 1_800 || step === 3_600) return 6
+  if (step >= 86_400) return 4
+  return 5
+}
+
 export function extractValue(state: AircraftState, selector: SeriesSelector): number | null {
   if (selector.kind === 'engine_throttle') {
     return (

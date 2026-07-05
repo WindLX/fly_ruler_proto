@@ -81,22 +81,22 @@ const loadError = computed(() => seriesStore.errorFor(queryableCurves.value))
 const palette = computed(() =>
   workspace.workspace.theme === 'dark'
     ? {
-        text: '#bac4cf',
-        muted: '#7f8c9a',
-        border: '#697583',
-        grid: 'rgba(127, 140, 154, 0.14)',
-        panel: '#20262d',
-        accentSoft: 'rgba(75, 146, 240, 0.18)',
-        cursor: '#f59e0b',
+        text: '#b8b8b8',
+        muted: '#8b8b8b',
+        border: '#606060',
+        grid: 'rgba(255, 255, 255, 0.07)',
+        panel: '#252525',
+        accentSoft: 'rgba(86, 128, 194, 0.24)',
+        cursor: '#f19a3e',
       }
     : {
-        text: '#465465',
-        muted: '#748092',
-        border: '#7b8794',
-        grid: 'rgba(70, 84, 101, 0.13)',
-        panel: '#edf2f7',
-        accentSoft: 'rgba(36, 120, 223, 0.13)',
-        cursor: '#c56700',
+        text: '#444444',
+        muted: '#707070',
+        border: '#777777',
+        grid: 'rgba(0, 0, 0, 0.09)',
+        panel: '#d6d6d6',
+        accentSoft: 'rgba(71, 119, 189, 0.18)',
+        cursor: '#cc6810',
       },
 )
 
@@ -123,11 +123,11 @@ const option = computed<EChartsOption>(() => {
   return {
     animation: false,
     backgroundColor: 'transparent',
-    grid: { left: 54, right: 54, top: props.chart.legend_visible ? 48 : 22, bottom: 54 },
+    grid: { left: 48, right: 48, top: props.chart.legend_visible ? 38 : 16, bottom: 45 },
     legend: {
       show: props.chart.legend_visible,
-      textStyle: { color: palette.value.text, fontSize: 11 },
-      top: 8,
+      textStyle: { color: palette.value.text, fontSize: 10 },
+      top: 4,
     },
     tooltip: {
       trigger: 'axis',
@@ -165,6 +165,7 @@ const option = computed<EChartsOption>(() => {
       axisLine: { lineStyle: { color: palette.value.border } },
       axisLabel: {
         color: palette.value.muted,
+        fontSize: 10,
         formatter: (value: number) => formatRelativeTime(value, false),
       },
       splitLine: { lineStyle: { color: palette.value.grid } },
@@ -174,14 +175,14 @@ const option = computed<EChartsOption>(() => {
         type: 'value',
         scale: true,
         position: 'left',
-        axisLabel: { color: palette.value.muted },
+        axisLabel: { color: palette.value.muted, fontSize: 10 },
         splitLine: { lineStyle: { color: palette.value.grid } },
       },
       {
         type: 'value',
         scale: true,
         position: 'right',
-        axisLabel: { color: palette.value.muted },
+        axisLabel: { color: palette.value.muted, fontSize: 10 },
         splitLine: { show: false },
       },
     ],
@@ -201,8 +202,8 @@ const option = computed<EChartsOption>(() => {
         end: typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
         startValue: zoomStartValue,
         endValue: zoomEndValue,
-        height: 18,
-        bottom: 8,
+        height: 14,
+        bottom: 5,
         borderColor: palette.value.border,
         backgroundColor: palette.value.panel,
         fillerColor: palette.value.accentSoft,
@@ -289,19 +290,17 @@ watch(
 
 <template>
   <article
-    class="panel-surface flex h-full min-h-0 flex-col overflow-hidden rounded-lg"
-    :class="workspace.workspace.selected_chart_id === chart.id ? 'ring-1 ring-(--accent)' : ''"
+    class="chart-card"
+    :class="{ 'chart-card-selected': workspace.workspace.selected_chart_id === chart.id }"
     @pointerdown="workspace.workspace.selected_chart_id = chart.id"
   >
-    <header
-      class="chart-drag-handle flex h-9 shrink-0 cursor-move items-center gap-2 border-b border-(--border-color) px-3"
-    >
+    <header class="chart-drag-handle">
       <BarChart3 class="h-4 w-4 text-(--accent)" />
       <span class="min-w-0 flex-1 truncate text-xs font-semibold">{{ chart.title }}</span>
-      <span class="status-chip">{{ t('chart.curveCount', { count: chart.curves.length }) }}</span>
-      <span class="status-chip">{{ t('chart.pointCount', { count: pointCount }) }}</span>
+      <span class="editor-stat">{{ t('chart.curveCount', { count: chart.curves.length }) }}</span>
+      <span class="editor-stat">{{ t('chart.pointCount', { count: pointCount }) }}</span>
       <button
-        class="icon-button h-7 w-7"
+        class="editor-icon-button"
         :title="t('chart.remove')"
         @click.stop="workspace.removeChart(chart.id)"
       >

@@ -26,12 +26,10 @@ function eventLabel(eventType: string): string {
 </script>
 
 <template>
-  <aside
-    class="panel-surface flex min-h-0 w-86 shrink-0 scrollbar-thin flex-col overflow-y-auto rounded-lg"
-  >
-    <section class="border-b border-(--border-color) p-3">
-      <h2 class="section-title">{{ t('inspector.currentState') }}</h2>
-      <div v-if="sample" class="mt-2 space-y-2 text-xs">
+  <aside class="editor-panel right-sidebar scrollbar-thin">
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('inspector.currentState') }}</h2>
+      <div v-if="sample" class="editor-section-body text-xs">
         <div class="mono text-(--text-muted)">
           {{
             formatRelativeTime(
@@ -45,9 +43,9 @@ function eventLabel(eventType: string): string {
       <p v-else class="empty-copy">{{ t('inspector.noSample') }}</p>
     </section>
 
-    <section class="border-b border-(--border-color) p-3">
-      <h2 class="section-title">{{ t('inspector.events') }}</h2>
-      <div v-if="events.length" class="mt-2 space-y-1">
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('inspector.events') }}</h2>
+      <div v-if="events.length" class="editor-section-body">
         <div
           v-for="event in events"
           :key="`${event.timestamp_secs}:${event.event_type}`"
@@ -67,147 +65,149 @@ function eventLabel(eventType: string): string {
       <p v-else class="empty-copy">{{ t('inspector.noEvents') }}</p>
     </section>
 
-    <section v-if="chart" class="p-3">
-      <h2 class="section-title">{{ t('inspector.chart') }}</h2>
-      <label class="field-label mt-3">
-        {{ t('inspector.title') }}
-        <input v-model="chart.title" class="toolbar-input w-full" />
-      </label>
-      <label class="mt-2 flex items-center gap-2 text-xs">
-        <input v-model="chart.legend_visible" type="checkbox" />{{ t('inspector.showLegend') }}
-      </label>
+    <section v-if="chart" class="editor-section">
+      <h2 class="editor-section-header">{{ t('inspector.chart') }}</h2>
+      <div class="editor-section-body">
+        <label class="field-label">
+          {{ t('inspector.title') }}
+          <input v-model="chart.title" class="editor-input w-full" />
+        </label>
+        <label class="mt-2 flex items-center gap-2 text-xs">
+          <input v-model="chart.legend_visible" type="checkbox" />{{ t('inspector.showLegend') }}
+        </label>
 
-      <article
-        v-for="(curve, index) in chart.curves"
-        :key="`${curve.aircraft_id}:${index}`"
-        class="mt-3 rounded-lg border border-(--border-color) bg-(--card-bg) p-3"
-      >
-        <div class="flex items-center gap-2">
-          <input
-            v-model="curve.color"
-            type="color"
-            class="h-7 w-8 cursor-pointer border-0 bg-transparent"
-          />
-          <input v-model="curve.alias" class="toolbar-input min-w-0 flex-1" />
-          <button
-            class="icon-button h-7 w-7"
-            :title="curve.visible ? t('inspector.hideCurve') : t('inspector.showCurve')"
-            @click="curve.visible = !curve.visible"
-          >
-            <Eye v-if="curve.visible" class="h-3.5 w-3.5" />
-            <EyeOff v-else class="h-3.5 w-3.5" />
-          </button>
-          <button
-            class="icon-button h-7 w-7"
-            :title="t('inspector.removeCurve')"
-            @click="chart.curves.splice(index, 1)"
-          >
-            <Trash2 class="h-3.5 w-3.5" />
-          </button>
-        </div>
-        <div class="mt-3 grid grid-cols-2 gap-2">
-          <label class="field-label col-span-2">
-            {{ t('inspector.aircraft') }}
-            <select v-model="curve.aircraft_id" class="toolbar-select w-full">
-              <option
-                v-if="!server.aircraft.some((aircraft) => aircraft.id === curve.aircraft_id)"
-                :value="curve.aircraft_id"
-                disabled
-              >
-                {{ t('inspector.unavailableAircraft', { id: curve.aircraft_id }) }}
-              </option>
-              <option v-for="aircraft in server.aircraft" :key="aircraft.id" :value="aircraft.id">
-                {{ aircraft.name || aircraft.id }}
-              </option>
-            </select>
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.pattern') }}
-            <select v-model="curve.line_pattern" class="toolbar-select w-full">
-              <option value="solid">{{ t('inspector.solid') }}</option>
-              <option value="dashed">{{ t('inspector.dashed') }}</option>
-              <option value="dotted">{{ t('inspector.dotted') }}</option>
-            </select>
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.yAxis') }}
-            <select v-model="curve.y_axis" class="toolbar-select w-full">
-              <option value="left">{{ t('inspector.left') }}</option>
-              <option value="right">{{ t('inspector.right') }}</option>
-            </select>
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.width') }}
+        <article
+          v-for="(curve, index) in chart.curves"
+          :key="`${curve.aircraft_id}:${index}`"
+          class="curve-editor"
+        >
+          <div class="flex items-center gap-2">
             <input
-              v-model.number="curve.line_width"
-              type="number"
-              min="0.5"
-              max="8"
-              step="0.5"
-              class="toolbar-input w-full"
+              v-model="curve.color"
+              type="color"
+              class="h-7 w-8 cursor-pointer border-0 bg-transparent"
             />
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.opacity') }}
-            <input
-              v-model.number="curve.opacity"
-              type="number"
-              min="0"
-              max="1"
-              step="0.1"
-              class="toolbar-input w-full"
-            />
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.scale') }}
-            <input
-              v-model.number="curve.scale"
-              type="number"
-              step="any"
-              class="toolbar-input w-full"
-            />
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.offset') }}
-            <input
-              v-model.number="curve.offset"
-              type="number"
-              step="any"
-              class="toolbar-input w-full"
-            />
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.unit') }}
-            <input v-model="curve.unit" class="toolbar-input w-full" />
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.format') }}
-            <select v-model="curve.value_format" class="toolbar-select w-full">
-              <option value="auto">{{ t('inspector.auto') }}</option>
-              <option value="fixed">{{ t('inspector.fixed') }}</option>
-              <option value="scientific">{{ t('inspector.scientific') }}</option>
-            </select>
-          </label>
-          <label class="field-label"
-            >{{ t('inspector.precision') }}
-            <input
-              v-model.number="curve.precision"
-              type="number"
-              min="0"
-              max="8"
-              class="toolbar-input w-full"
-            />
-          </label>
-          <label class="mt-5 flex items-center gap-2 text-xs"
-            ><input v-model="curve.smooth" type="checkbox" />{{ t('inspector.smooth') }}</label
-          >
-          <label class="flex items-center gap-2 text-xs"
-            ><input v-model="curve.show_symbol" type="checkbox" />{{
-              t('inspector.symbols')
-            }}</label
-          >
-        </div>
-      </article>
+            <input v-model="curve.alias" class="editor-input min-w-0 flex-1" />
+            <button
+              class="editor-icon-button"
+              :title="curve.visible ? t('inspector.hideCurve') : t('inspector.showCurve')"
+              @click="curve.visible = !curve.visible"
+            >
+              <Eye v-if="curve.visible" class="h-3.5 w-3.5" />
+              <EyeOff v-else class="h-3.5 w-3.5" />
+            </button>
+            <button
+              class="editor-icon-button"
+              :title="t('inspector.removeCurve')"
+              @click="chart.curves.splice(index, 1)"
+            >
+              <Trash2 class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div class="mt-3 grid grid-cols-2 gap-2">
+            <label class="field-label col-span-2">
+              {{ t('inspector.aircraft') }}
+              <select v-model="curve.aircraft_id" class="editor-select w-full">
+                <option
+                  v-if="!server.aircraft.some((aircraft) => aircraft.id === curve.aircraft_id)"
+                  :value="curve.aircraft_id"
+                  disabled
+                >
+                  {{ t('inspector.unavailableAircraft', { id: curve.aircraft_id }) }}
+                </option>
+                <option v-for="aircraft in server.aircraft" :key="aircraft.id" :value="aircraft.id">
+                  {{ aircraft.name || aircraft.id }}
+                </option>
+              </select>
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.pattern') }}
+              <select v-model="curve.line_pattern" class="editor-select w-full">
+                <option value="solid">{{ t('inspector.solid') }}</option>
+                <option value="dashed">{{ t('inspector.dashed') }}</option>
+                <option value="dotted">{{ t('inspector.dotted') }}</option>
+              </select>
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.yAxis') }}
+              <select v-model="curve.y_axis" class="editor-select w-full">
+                <option value="left">{{ t('inspector.left') }}</option>
+                <option value="right">{{ t('inspector.right') }}</option>
+              </select>
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.width') }}
+              <input
+                v-model.number="curve.line_width"
+                type="number"
+                min="0.5"
+                max="8"
+                step="0.5"
+                class="editor-input w-full"
+              />
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.opacity') }}
+              <input
+                v-model.number="curve.opacity"
+                type="number"
+                min="0"
+                max="1"
+                step="0.1"
+                class="editor-input w-full"
+              />
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.scale') }}
+              <input
+                v-model.number="curve.scale"
+                type="number"
+                step="any"
+                class="editor-input w-full"
+              />
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.offset') }}
+              <input
+                v-model.number="curve.offset"
+                type="number"
+                step="any"
+                class="editor-input w-full"
+              />
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.unit') }}
+              <input v-model="curve.unit" class="editor-input w-full" />
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.format') }}
+              <select v-model="curve.value_format" class="editor-select w-full">
+                <option value="auto">{{ t('inspector.auto') }}</option>
+                <option value="fixed">{{ t('inspector.fixed') }}</option>
+                <option value="scientific">{{ t('inspector.scientific') }}</option>
+              </select>
+            </label>
+            <label class="field-label"
+              >{{ t('inspector.precision') }}
+              <input
+                v-model.number="curve.precision"
+                type="number"
+                min="0"
+                max="8"
+                class="editor-input w-full"
+              />
+            </label>
+            <label class="mt-5 flex items-center gap-2 text-xs"
+              ><input v-model="curve.smooth" type="checkbox" />{{ t('inspector.smooth') }}</label
+            >
+            <label class="flex items-center gap-2 text-xs"
+              ><input v-model="curve.show_symbol" type="checkbox" />{{
+                t('inspector.symbols')
+              }}</label
+            >
+          </div>
+        </article>
+      </div>
     </section>
   </aside>
 </template>

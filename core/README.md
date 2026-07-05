@@ -521,7 +521,7 @@ REST 根路径为 `/api/v1`：
 | GET | `/aircraft/{id}/state?at=...` | 当前游标或指定时间的前值 |
 | GET | `/aircraft/{id}/states`, `/events` | 时间范围分页查询 |
 | GET | `/timeline/events` | 全部飞机事件的全局时间排序与分页 |
-| GET/POST/PUT | `/playback...` | live、pause、play、seek、speed |
+| GET/POST/PUT | `/playback...` | live、pause、play、seek、step、speed |
 | POST | `/memory/clear` | 需提交 `{"confirm":true}` |
 | GET | `/sessions` | 列出数据根目录内的快照 |
 | POST | `/sessions/{name}/save`, `/load` | 异步保存/加载 |
@@ -533,6 +533,11 @@ REST 根路径为 `/api/v1`：
 `/api/v1/ws` 是严格只读的聚合快照流。它发送 `hello`、`snapshot`、
 `operation_status`、`store_changed` 和 `workspace_changed`；控制命令必须走 REST。未指定飞机
 筛选时最多发送 64 架，并用 `truncated` 标记截断。
+
+`POST /playback/step` 接受
+`{"unit":"sample|event","direction":"previous|next","count":1}`。sample
+按全部飞机状态中的全局唯一时间戳跳转，event 按全部生命周期和 custom
+事件的全局唯一时间戳跳转；`count` 范围为 `1..=100`，操作后进入暂停回放。
 
 Series selector 使用带 `kind` 的 tagged JSON（`standard`、
 `engine_throttle`、`custom`），避免 custom field ID 中的点号产生歧义。
@@ -750,11 +755,10 @@ cargo test -p fly_ruler_proto_core
 
 ## 10. 相关文档
 
-- Python 绑定：`../bindings/python/README.md`
-- Godot 绑定：`../bindings/godot/README.md`
-- 项目总览：`../AGENT.md`
-- Protobuf Schema：`../proto/fly_ruler.proto`
-- Crate 内 Schema 镜像：`proto/fly_ruler.proto`
+- [Python 绑定](../bindings/python/README.md)
+- [项目总览](../AGENT.md)
+- [Protobuf Schema](../proto/fly_ruler.proto)
+- [Crate 内 Schema 镜像](proto/fly_ruler.proto)
 
 The management implementation is split into dedicated gate, series, workspace,
 and HTTP runtime modules so persistence, replay control, and plotting queries

@@ -497,6 +497,103 @@ impl TimeSeriesStore {
         page_slice(&events, offset, limit)
     }
 
+    /// Return the previous globally unique state timestamp.
+    ///
+    /// Equal timestamps from different aircraft count as one frame. When
+    /// `count` exceeds the remaining number of frames, the earliest available
+    /// timestamp is returned.
+    pub fn previous_global_state_timestamp(&self, cursor: f64, count: usize) -> Option<f64> {
+        self.adjacent_global_timestamp(cursor, count, TimelineEntryKind::State, false)
+    }
+
+    /// Return the next globally unique state timestamp.
+    ///
+    /// Equal timestamps from different aircraft count as one frame. When
+    /// `count` exceeds the remaining number of frames, the latest available
+    /// timestamp is returned.
+    pub fn next_global_state_timestamp(&self, cursor: f64, count: usize) -> Option<f64> {
+        self.adjacent_global_timestamp(cursor, count, TimelineEntryKind::State, true)
+    }
+
+    /// Return the previous globally unique lifecycle/custom event timestamp.
+    pub fn previous_global_event_timestamp(&self, cursor: f64, count: usize) -> Option<f64> {
+        self.adjacent_global_timestamp(cursor, count, TimelineEntryKind::Event, false)
+    }
+
+    /// Return the next globally unique lifecycle/custom event timestamp.
+    pub fn next_global_event_timestamp(&self, cursor: f64, count: usize) -> Option<f64> {
+        self.adjacent_global_timestamp(cursor, count, TimelineEntryKind::Event, true)
+    }
+
+    fn adjacent_global_timestamp(
+        &self,
+        cursor: f64,
+        count: usize,
+        kind: TimelineEntryKind,
+        forward: bool,
+    ) -> Option<f64> {
+        if !cursor.is_finite() || count == 0 {
+            return None;
+        }
+
+        let data = read_unpoisoned(&self.data);
+        let mut probe = cursor;
+        let mut result = None;
+        for _ in 0..count {
+            let candidate = data
+                .iter()
+                .filter_map(|entry| match kind {
+                    TimelineEntryKind::State => {
+                        if forward {
+                            let index = entry
+                                .states
+                                .partition_point(|state| state.timestamp_secs <= probe);
+                            entry.states.get(index).map(|state| state.timestamp_secs)
+                        } else {
+                            let index = entry
+                                .states
+                                .partition_point(|state| state.timestamp_secs < probe);
+                            index
+                                .checked_sub(1)
+                                .and_then(|index| entry.states.get(index))
+                                .map(|state| state.timestamp_secs)
+                        }
+                    }
+                    TimelineEntryKind::Event => {
+                        if forward {
+                            let index = entry
+                                .events
+                                .partition_point(|event| event.timestamp_secs <= probe);
+                            entry.events.get(index).map(|event| event.timestamp_secs)
+                        } else {
+                            let index = entry
+                                .events
+                                .partition_point(|event| event.timestamp_secs < probe);
+                            index
+                                .checked_sub(1)
+                                .and_then(|index| entry.events.get(index))
+                                .map(|event| event.timestamp_secs)
+                        }
+                    }
+                })
+                .reduce(|best, candidate| {
+                    if (forward && candidate.total_cmp(&best).is_lt())
+                        || (!forward && candidate.total_cmp(&best).is_gt())
+                    {
+                        candidate
+                    } else {
+                        best
+                    }
+                });
+            let Some(candidate) = candidate else {
+                break;
+            };
+            result = Some(candidate);
+            probe = candidate;
+        }
+        result
+    }
+
     /// Return all aircraft IDs currently in the store, sorted.
     pub fn get_aircraft_ids(&self) -> Vec<AircraftId> {
         let data = read_unpoisoned(&self.data);
@@ -774,6 +871,12 @@ impl TimeSeriesStore {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TimelineEntryKind {
+    State,
+    Event,
+}
+
 fn page_slice<T: Clone>(items: &[T], offset: usize, limit: usize) -> StorePage<T> {
     let total = items.len();
     let start = offset.min(total);
@@ -983,6 +1086,26 @@ mod tests {
         assert_eq!(states[0].timestamp_secs, 1.0);
         assert_eq!(states[1].timestamp_secs, 2.0);
         assert_eq!(states[2].timestamp_secs, 3.0);
+    }
+
+    #[test]
+    fn adjacent_global_timestamps_deduplicate_and_clamp_to_available_entries() {
+        let store = TimeSeriesStore::new();
+        for timestamp in [1.0, 2.0, 4.0] {
+            store.append_state("a".to_string(), timestamp, mk_state(timestamp));
+        }
+        for timestamp in [2.0, 3.0, 5.0] {
+            store.append_state("b".to_string(), timestamp, mk_state(timestamp));
+        }
+        store.append_event("a".to_string(), 1.5, Event::Custom("a".to_string()));
+        store.append_event("b".to_string(), 3.5, Event::Custom("b".to_string()));
+
+        assert_eq!(store.next_global_state_timestamp(1.0, 1), Some(2.0));
+        assert_eq!(store.next_global_state_timestamp(1.0, 2), Some(3.0));
+        assert_eq!(store.next_global_state_timestamp(1.0, 99), Some(5.0));
+        assert_eq!(store.previous_global_state_timestamp(5.0, 2), Some(3.0));
+        assert_eq!(store.previous_global_event_timestamp(4.0, 1), Some(3.5));
+        assert_eq!(store.next_global_event_timestamp(0.0, 99), Some(3.5));
     }
 
     #[test]

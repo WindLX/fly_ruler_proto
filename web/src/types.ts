@@ -1,4 +1,6 @@
 export type PlaybackMode = 'live' | 'replay_paused' | 'replay_playing'
+export type PlaybackStepUnit = 'sample' | 'event'
+export type PlaybackStepDirection = 'previous' | 'next'
 export type ThemeMode = 'dark' | 'light'
 export type LinePattern = 'solid' | 'dashed' | 'dotted'
 export type ValueFormat = 'auto' | 'fixed' | 'scientific'

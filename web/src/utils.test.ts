@@ -7,11 +7,13 @@ import {
   formatAbsoluteTime,
   formatNumber,
   formatRelativeTime,
+  generateTimelineTicks,
   niceTickStep,
   normalizeWorkspace,
   selectorKey,
   toAbsoluteTime,
   toRelativeTime,
+  timelineTickStep,
 } from '@/utils'
 
 describe('series helpers', () => {
@@ -69,5 +71,16 @@ describe('series helpers', () => {
       } as never,
     })
     expect(normalizeWorkspace(workspace).charts[0]?.view).toEqual({})
+  })
+
+  it('generates pixel-aware major and minor timeline ticks', () => {
+    expect(timelineTickStep(30, 1_256)).toBe(2)
+    expect(timelineTickStep(30, 600)).toBe(5)
+    const ticks = generateTimelineTicks(30, 1_256)
+    const major = ticks.filter((tick) => tick.level === 'major')
+    const minor = ticks.filter((tick) => tick.level === 'minor')
+    expect(major.length).toBeGreaterThan(10)
+    expect(minor.length).toBeGreaterThan(major.length)
+    expect(major.some((tick) => tick.label === '+00:10')).toBe(true)
   })
 })

@@ -24,6 +24,7 @@ use crate::management::server::{
 };
 use crate::management::workspace::WorkspaceSnapshot;
 use crate::pb;
+use crate::playback::{PlaybackStepDirection, PlaybackStepUnit};
 use crate::store::{
     active_time_bounds, aircraft_count_for, event_count_for, state_count_for, Event,
     GlobalTimestampedEvent, TimeSeriesStore, TimestampedEvent, TimestampedState,
@@ -47,6 +48,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/v1/playback/pause", post(playback_pause))
         .route("/api/v1/playback/play", post(playback_play))
         .route("/api/v1/playback/seek", post(playback_seek))
+        .route("/api/v1/playback/step", post(playback_step))
         .route("/api/v1/playback/speed", put(playback_speed))
         .route("/api/v1/memory/clear", post(memory_clear))
         .route("/api/v1/sessions", get(session_list))
@@ -317,6 +319,24 @@ async fn playback_seek(
     Ok(Json(json!(state
         .playback
         .seek(body.timestamp)
+        .map_err(ApiError::from)?)))
+}
+
+#[derive(Deserialize)]
+struct StepRequest {
+    unit: PlaybackStepUnit,
+    direction: PlaybackStepDirection,
+    count: usize,
+}
+
+async fn playback_step(
+    State(state): State<AppState>,
+    body: Result<Json<StepRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let body = json_body(body)?;
+    Ok(Json(json!(state
+        .playback
+        .step(body.unit, body.direction, body.count)
         .map_err(ApiError::from)?)))
 }
 
@@ -852,6 +872,35 @@ mod tests {
             response_json(response).await["mode"],
             Value::String("replay_paused".to_string())
         );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/playback/step")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"unit":"sample","direction":"next","count":1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["cursor_secs"], 2.0);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/playback/step")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"unit":"event","direction":"previous","count":101}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let response = app
             .clone()

@@ -9,6 +9,8 @@ import type {
   SessionSummary,
   WorkspaceDocument,
   WorkspaceSnapshot,
+  PlaybackStepDirection,
+  PlaybackStepUnit,
 } from '@/types'
 import { resolveWebSocketUrl, runtimeConfig } from '@/runtime'
 
@@ -57,6 +59,11 @@ export const api = {
     apiFetch<ServerStatus['playback']>('/playback/seek', {
       method: 'POST',
       body: JSON.stringify({ timestamp }),
+    }),
+  step: (unit: PlaybackStepUnit, direction: PlaybackStepDirection, count = 1) =>
+    apiFetch<ServerStatus['playback']>('/playback/step', {
+      method: 'POST',
+      body: JSON.stringify({ unit, direction, count }),
     }),
   setSpeed: (speed: number) =>
     apiFetch<ServerStatus['playback']>('/playback/speed', {

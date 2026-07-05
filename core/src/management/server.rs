@@ -597,9 +597,9 @@ impl From<PlaybackError> for ApiError {
         Self {
             status: match error {
                 PlaybackError::EmptyStore => StatusCode::CONFLICT,
-                PlaybackError::InvalidTimestamp | PlaybackError::InvalidSpeed { .. } => {
-                    StatusCode::BAD_REQUEST
-                }
+                PlaybackError::InvalidTimestamp
+                | PlaybackError::InvalidSpeed { .. }
+                | PlaybackError::InvalidStepCount => StatusCode::BAD_REQUEST,
             },
             code: "playback_error",
             message: error.to_string(),

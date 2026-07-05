@@ -10,6 +10,8 @@ import type {
   SessionSummary,
   SnapshotMessage,
   TimestampedState,
+  PlaybackStepDirection,
+  PlaybackStepUnit,
 } from '@/types'
 
 export const useServerStore = defineStore('server', () => {
@@ -131,6 +133,15 @@ export const useServerStore = defineStore('server', () => {
     if (status.value) status.value.playback = next
   }
 
+  async function step(unit: PlaybackStepUnit, direction: PlaybackStepDirection, count = 1) {
+    const next = await api.step(unit, direction, count)
+    if (status.value) status.value.playback = next
+  }
+
+  function reportError(cause: unknown) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+
   return {
     connected,
     status,
@@ -152,5 +163,7 @@ export const useServerStore = defineStore('server', () => {
     pause,
     play,
     seek,
+    step,
+    reportError,
   }
 })

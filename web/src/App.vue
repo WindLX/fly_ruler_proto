@@ -11,11 +11,13 @@ import { useSeriesStore } from '@/stores/series'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { extractValue } from '@/utils'
+import { usePlaybackShortcuts } from '@/usePlaybackShortcuts'
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
 const series = useSeriesStore()
 const { locale, t, te } = useI18n()
+usePlaybackShortcuts()
 
 const allCurves = computed(() => [
   ...workspace.workspace.charts.flatMap((chart) => chart.curves),
@@ -91,15 +93,12 @@ watch(
 </script>
 
 <template>
-  <div class="flex h-screen min-h-0 flex-col bg-(--app-bg) text-(--text-primary)">
+  <div class="app-shell">
     <PlaybackToolbar />
-    <div
-      v-if="server.error"
-      class="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-400"
-    >
+    <div v-if="server.error" class="app-error">
       {{ te(server.error) ? t(server.error) : server.error }}
     </div>
-    <div class="flex min-h-0 flex-1 gap-2 p-2">
+    <div class="workbench">
       <DataSidebar v-if="workspace.workspace.left_panel_open" />
       <ChartWorkspace />
       <InspectorPanel v-if="workspace.workspace.right_panel_open" />
