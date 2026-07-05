@@ -13,13 +13,13 @@ the original timestamp seconds.
 Playback keyboard controls are active whenever focus is not inside an input,
 select, editable field, or modal dialog:
 
-| Shortcut | Action |
-|---|---|
-| `Space` | Pause Live/playing playback, or resume paused replay |
-| `←` / `→` | Previous/next globally unique aircraft sample timestamp |
-| `Shift` + `←` / `→` | Step ten sample timestamps |
-| `↑` / `↓` | Previous/next global lifecycle or custom event |
-| `Home` / `End` | Seek to the global data bounds |
+| Shortcut            | Action                                                  |
+| ------------------- | ------------------------------------------------------- |
+| `Space`             | Pause Live/playing playback, or resume paused replay    |
+| `←` / `→`           | Previous/next globally unique aircraft sample timestamp |
+| `Shift` + `←` / `→` | Step ten sample timestamps                              |
+| `↑` / `↓`           | Previous/next global lifecycle or custom event          |
+| `Home` / `End`      | Seek to the global data bounds                          |
 
 The timeline observes its rendered width and chooses labeled major ticks plus
 shorter minor ticks from millisecond through multi-day ranges. Event clustering
