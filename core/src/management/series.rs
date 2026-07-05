@@ -10,15 +10,29 @@ const MIN_MAX_POINTS: usize = 100;
 const MAX_MAX_POINTS: usize = 20_000;
 const MAX_SELECTIONS: usize = 64;
 
+/// Selector identifying a single time-series source for an aircraft.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SeriesSelector {
-    Standard { path: String },
-    EngineThrottle { index: u32 },
-    Custom { field_id: String },
+    /// A standard aircraft state field path such as `derived.altitude`.
+    Standard {
+        /// Dot-separated path like `derived.altitude`.
+        path: String,
+    },
+    /// Throttle lever ratio for the engine at the given index.
+    EngineThrottle {
+        /// Engine index starting at 1.
+        index: u32,
+    },
+    /// A user-defined numeric custom field.
+    Custom {
+        /// User-defined field identifier.
+        field_id: String,
+    },
 }
 
 impl SeriesSelector {
+    /// Return a stable key string for this selector.
     pub fn key(&self) -> String {
         match self {
             Self::Standard { path } => format!("standard:{path}"),
@@ -28,73 +42,111 @@ impl SeriesSelector {
     }
 }
 
+/// Metadata entry returned by the series catalog for one selectable field.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeriesCatalogItem {
+    /// Field selector.
     pub selector: SeriesSelector,
+    /// Display group used to organize fields in the UI.
     pub group: String,
+    /// Human-readable label.
     pub label: String,
+    /// Optional unit suffix.
     pub unit: Option<String>,
 }
 
+/// One selected series as part of a query request.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeriesSelection {
+    /// Aircraft that owns the series.
     pub aircraft_id: String,
+    /// Selected field.
     pub selector: SeriesSelector,
 }
 
+/// Time window for a series query.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeriesTimeRange {
+    /// Inclusive start timestamp in seconds.
     pub start: f64,
+    /// Inclusive end timestamp in seconds.
     pub end: f64,
 }
 
+/// Request body for `/api/v1/series/query`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeriesQueryRequest {
+    /// Selected series to fetch.
     pub selections: Vec<SeriesSelection>,
+    /// Optional time window; defaults to all available data.
     pub time_range: Option<SeriesTimeRange>,
+    /// Optional down-sampling target; defaults to `DEFAULT_MAX_POINTS`.
     pub max_points: Option<usize>,
 }
 
+/// Simple statistics computed over a sampled series.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeriesStats {
+    /// Minimum y-value.
     pub min: f64,
+    /// Maximum y-value.
     pub max: f64,
+    /// Last y-value.
     pub last: f64,
+    /// First x-value (timestamp).
     pub start: f64,
+    /// Last x-value (timestamp).
     pub end: f64,
 }
 
+/// One series result returned by a query.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeriesData {
+    /// Composite key `{aircraft_id}::{selector_key}`.
     pub key: String,
+    /// Aircraft that owns the series.
     pub aircraft_id: String,
+    /// Field selector.
     pub selector: SeriesSelector,
+    /// Sampled `[timestamp_secs, value]` points.
     pub points: Vec<[f64; 2]>,
+    /// Number of points in the raw time window.
     pub total_points: usize,
+    /// Number of points after down-sampling.
     pub returned_points: usize,
+    /// Statistics over the raw points, if any exist.
     pub stats: Option<SeriesStats>,
 }
 
+/// Response body for `/api/v1/series/query`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeriesQueryResponse {
+    /// Result series in the same order as the request selections.
     pub series: Vec<SeriesData>,
 }
 
+/// Errors that can occur while building a series catalog or query.
 #[derive(Debug, thiserror::Error)]
 pub enum SeriesError {
+    /// The requested aircraft does not exist in the store.
     #[error("aircraft not found: {0}")]
     AircraftNotFound(String),
+    /// The request must contain between 1 and `MAX_SELECTIONS` selections.
     #[error("selections must contain between 1 and {MAX_SELECTIONS} entries")]
     InvalidSelectionCount,
+    /// `max_points` is outside the allowed range.
     #[error("max_points must be within {MIN_MAX_POINTS}..={MAX_MAX_POINTS}")]
     InvalidMaxPoints,
+    /// The requested time range is not finite or is inverted.
     #[error("time range must be finite and start <= end")]
     InvalidTimeRange,
+    /// A standard field path is not recognized.
     #[error("unknown standard field: {0}")]
     UnknownStandardField(String),
 }
 
+/// Build the catalog of selectable series for an aircraft.
 pub fn catalog(
     store: &TimeSeriesStore,
     aircraft_id: &str,
@@ -112,6 +164,7 @@ pub fn catalog(
     Ok(selectors.into_iter().map(catalog_item).collect())
 }
 
+/// Query sampled series data for the selections in `request`.
 pub fn query(
     store: &TimeSeriesStore,
     request: SeriesQueryRequest,

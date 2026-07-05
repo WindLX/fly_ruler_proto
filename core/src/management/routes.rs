@@ -1,344 +1,37 @@
-//! HTTP/WebSocket management API and persistence operation orchestration.
+//! HTTP/WebSocket route handlers for the management API.
 
-use std::collections::VecDeque;
 use std::fs;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::header::{CONTENT_TYPE, ORIGIN};
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use thiserror::Error;
-use tokio::net::TcpListener;
-use tokio::sync::{broadcast, Notify, RwLock as AsyncRwLock};
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
-use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::services::{ServeDir, ServeFile};
-use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
-use uuid::Uuid;
 
-use crate::config::ManagementConfig;
+use crate::management::series::{self, SeriesQueryRequest};
+use crate::management::server::{
+    json_body, query_body, validate_session_name, ApiError, AppState, OperationState,
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MAX_WS_AIRCRAFT,
+};
+use crate::management::workspace::WorkspaceSnapshot;
 use crate::pb;
-use crate::playback::{PlaybackController, PlaybackError};
 use crate::store::{
     active_time_bounds, aircraft_count_for, event_count_for, state_count_for, Event,
-    TimeSeriesStore, TimestampedEvent, TimestampedState,
+    GlobalTimestampedEvent, TimeSeriesStore, TimestampedEvent, TimestampedState,
 };
-use crate::transport::SessionHandle;
 use crate::utils::now_secs;
 use crate::PROTOCOL_VERSION;
 
-mod gate;
-pub use gate::IngestionGate;
-mod series;
-mod workspace;
-
-use series::{SeriesError, SeriesQueryRequest};
-use workspace::{WorkspaceError, WorkspaceSnapshot, WorkspaceStore};
-
-const MAX_PAGE_LIMIT: usize = 10_000;
-const DEFAULT_PAGE_LIMIT: usize = 1_000;
-const MAX_WS_AIRCRAFT: usize = 64;
-const MAX_OPERATIONS: usize = 128;
-
-/// Persistence operation lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationState {
-    /// Accepted but not yet executing.
-    Queued,
-    /// Currently executing.
-    Running,
-    /// Completed successfully.
-    Succeeded,
-    /// Completed with an error.
-    Failed,
-}
-
-/// Public persistence operation status.
-#[derive(Debug, Clone, Serialize)]
-pub struct OperationRecord {
-    /// Operation UUID.
-    pub id: String,
-    /// Operation kind (`save` or `load`).
-    pub kind: String,
-    /// Session name.
-    pub session: String,
-    /// Current lifecycle state.
-    pub state: OperationState,
-    /// Creation timestamp.
-    pub created_at_secs: f64,
-    /// Last update timestamp.
-    pub updated_at_secs: f64,
-    /// Error message for failed operations.
-    pub error: Option<String>,
-}
-
-/// Management server startup/runtime errors.
-#[derive(Debug, Error)]
-pub enum ManagementError {
-    /// Socket or filesystem I/O failure.
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    /// Invalid server configuration.
-    #[error("invalid management configuration: {0}")]
-    InvalidConfig(String),
-}
-
-#[derive(Clone)]
-struct AppState {
-    store: Arc<TimeSeriesStore>,
-    playback: Arc<PlaybackController>,
-    ingestion: Arc<IngestionGate>,
-    sessions: Arc<AsyncRwLock<Option<SessionHandle>>>,
-    config: ManagementConfig,
-    operations: OperationManager,
-    workspace: Arc<WorkspaceStore>,
-    shutdown: CancellationToken,
-}
-
-#[derive(Clone)]
-struct OperationManager {
-    active: Arc<AtomicBool>,
-    coordination: Arc<Mutex<()>>,
-    records: Arc<Mutex<VecDeque<OperationRecord>>>,
-    notifications: broadcast::Sender<Value>,
-    idle: Arc<Notify>,
-}
-
-impl OperationManager {
-    fn new() -> Self {
-        let (notifications, _) = broadcast::channel(64);
-        Self {
-            active: Arc::new(AtomicBool::new(false)),
-            coordination: Arc::new(Mutex::new(())),
-            records: Arc::new(Mutex::new(VecDeque::new())),
-            notifications,
-            idle: Arc::new(Notify::new()),
-        }
-    }
-
-    fn begin(&self, kind: &str, session: &str) -> Result<OperationRecord, ApiError> {
-        let _coordination = lock_unpoisoned(&self.coordination);
-        if self
-            .active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(ApiError::conflict(
-                "operation_busy",
-                "another persistence operation is already running",
-            ));
-        }
-        let now = now_secs();
-        let record = OperationRecord {
-            id: Uuid::new_v4().simple().to_string(),
-            kind: kind.to_string(),
-            session: session.to_string(),
-            state: OperationState::Queued,
-            created_at_secs: now,
-            updated_at_secs: now,
-            error: None,
-        };
-        let mut records = lock_unpoisoned(&self.records);
-        records.push_back(record.clone());
-        while records.len() > MAX_OPERATIONS {
-            records.pop_front();
-        }
-        drop(records);
-        let _ = self.notifications.send(json!({
-            "type": "operation_status",
-            "operation": record,
-        }));
-        Ok(record)
-    }
-
-    fn update(&self, id: &str, state: OperationState, error: Option<String>) {
-        let updated = {
-            let mut records = lock_unpoisoned(&self.records);
-            let Some(record) = records.iter_mut().find(|record| record.id == id) else {
-                return;
-            };
-            record.state = state;
-            record.error = error;
-            record.updated_at_secs = now_secs();
-            record.clone()
-        };
-        let _ = self.notifications.send(json!({
-            "type": "operation_status",
-            "operation": updated,
-        }));
-        if matches!(state, OperationState::Succeeded | OperationState::Failed) {
-            let _coordination = lock_unpoisoned(&self.coordination);
-            self.active.store(false, Ordering::Release);
-            self.idle.notify_waiters();
-        }
-    }
-
-    fn get(&self, id: &str) -> Option<OperationRecord> {
-        lock_unpoisoned(&self.records)
-            .iter()
-            .find(|record| record.id == id)
-            .cloned()
-    }
-
-    fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
-    }
-
-    fn notify_store_changed(&self, reason: &str) {
-        let _ = self.notifications.send(json!({
-            "type": "store_changed",
-            "reason": reason,
-        }));
-    }
-
-    fn notify_workspace_changed(&self, revision: u64) {
-        let _ = self.notifications.send(json!({
-            "type": "workspace_changed",
-            "revision": revision,
-        }));
-    }
-
-    fn run_when_idle<T>(&self, action: impl FnOnce() -> T) -> Result<T, ApiError> {
-        let _coordination = lock_unpoisoned(&self.coordination);
-        if self.is_active() {
-            return Err(ApiError::conflict(
-                "operation_busy",
-                "a persistence operation is running",
-            ));
-        }
-        Ok(action())
-    }
-
-    async fn wait_idle(&self) {
-        while self.is_active() {
-            let notified = self.idle.notified();
-            if !self.is_active() {
-                break;
-            }
-            notified.await;
-        }
-    }
-}
-
-/// Running Axum management server.
-pub struct ManagementServerRuntime {
-    local_addr: SocketAddr,
-    shutdown: CancellationToken,
-    operations: OperationManager,
-    task: Option<JoinHandle<()>>,
-}
-
-impl ManagementServerRuntime {
-    /// Start a management server over shared kernel state.
-    pub async fn start(
-        addr: &str,
-        config: ManagementConfig,
-        store: Arc<TimeSeriesStore>,
-        playback: Arc<PlaybackController>,
-        ingestion: Arc<IngestionGate>,
-        sessions: Arc<AsyncRwLock<Option<SessionHandle>>>,
-    ) -> Result<Self, ManagementError> {
-        validate_management_config(&config)?;
-        fs::create_dir_all(&config.data_root)?;
-        let listener = TcpListener::bind(addr).await?;
-        let local_addr = listener.local_addr()?;
-        if !local_addr.ip().is_loopback() {
-            return Err(ManagementError::InvalidConfig(format!(
-                "management server must bind to a loopback address, got {local_addr}"
-            )));
-        }
-        let operations = OperationManager::new();
-        let shutdown = CancellationToken::new();
-        let app_state = AppState {
-            store,
-            playback,
-            ingestion,
-            sessions,
-            config: config.clone(),
-            operations: operations.clone(),
-            workspace: Arc::new(WorkspaceStore::new(&config.data_root)),
-            shutdown: shutdown.clone(),
-        };
-
-        let app = configured_router(app_state)?;
-        let serve_shutdown = shutdown.clone();
-        let task = tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(serve_shutdown.cancelled_owned())
-                .await
-            {
-                warn!(target: "fly_ruler_proto_core.management", %error, "management server stopped with error");
-            }
-        });
-        info!(target: "fly_ruler_proto_core.management", %local_addr, "management server started");
-        Ok(Self {
-            local_addr,
-            shutdown,
-            operations,
-            task: Some(task),
-        })
-    }
-
-    /// Return the bound local address.
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
-    /// Stop the management server.
-    pub async fn stop(&mut self) {
-        self.shutdown.cancel();
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
-        }
-        self.operations.wait_idle().await;
-    }
-}
-
-fn configured_router(state: AppState) -> Result<Router, ManagementError> {
-    let origins = state
-        .config
-        .cors_origins
-        .iter()
-        .map(|origin| {
-            HeaderValue::from_str(origin).map_err(|_| {
-                ManagementError::InvalidConfig(format!("invalid CORS origin: {origin}"))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(origins))
-        .allow_methods([Method::GET, Method::POST, Method::PUT])
-        .allow_headers([CONTENT_TYPE, ORIGIN]);
-
-    let web_root = state.config.web_root.clone();
-    let mut app = router(state);
-    if let Some(root) = web_root.filter(|root| root.join("index.html").is_file()) {
-        let static_files = ServeDir::new(&root).fallback(ServeFile::new(root.join("index.html")));
-        app = app.fallback_service(static_files);
-    } else {
-        app = app.fallback(route_not_found);
-    }
-    Ok(app.layer(cors).layer(TraceLayer::new_for_http()))
-}
-
-fn router(state: AppState) -> Router {
+pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/status", get(status))
@@ -346,6 +39,7 @@ fn router(state: AppState) -> Router {
         .route("/api/v1/aircraft/{id}/state", get(aircraft_state))
         .route("/api/v1/aircraft/{id}/states", get(aircraft_states))
         .route("/api/v1/aircraft/{id}/events", get(aircraft_events))
+        .route("/api/v1/timeline/events", get(timeline_events))
         .route("/api/v1/aircraft/{id}/series/catalog", get(series_catalog))
         .route("/api/v1/series/query", post(series_query))
         .route("/api/v1/playback", get(playback_status))
@@ -367,7 +61,7 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn route_not_found() -> ApiError {
+pub(crate) async fn route_not_found() -> ApiError {
     ApiError::not_found("route_not_found", "API route not found")
 }
 
@@ -536,6 +230,23 @@ async fn aircraft_events(
     })))
 }
 
+async fn timeline_events(
+    State(state): State<AppState>,
+    query: Result<Query<RangeQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let query = query_body(query)?;
+    let (offset, limit) = validated_page(&query)?;
+    let page = state
+        .store
+        .get_global_events_page(query.start, query.end, offset, limit);
+    Ok(Json(json!({
+        "total": page.total,
+        "offset": page.offset,
+        "limit": page.limit,
+        "items": page.items.iter().map(global_event_json).collect::<Vec<_>>(),
+    })))
+}
+
 async fn series_catalog(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -652,8 +363,12 @@ async fn memory_clear(
 }
 
 async fn session_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let data_root = &state.config.data_root;
+    if !data_root.exists() {
+        fs::create_dir_all(data_root).map_err(ApiError::internal)?;
+    }
     let mut sessions = Vec::new();
-    for entry in fs::read_dir(&state.config.data_root).map_err(ApiError::internal)? {
+    for entry in fs::read_dir(data_root).map_err(ApiError::internal)? {
         let entry = entry.map_err(ApiError::internal)?;
         if !entry.file_type().map_err(ApiError::internal)?.is_dir() {
             continue;
@@ -713,7 +428,7 @@ async fn session_save(
             let snapshot = blocking_state
                 .ingestion
                 .with_paused(|| blocking_state.store.snapshot_clone());
-            save_snapshot_atomic(
+            crate::management::server::save_snapshot_atomic(
                 &snapshot,
                 &blocking_state.config.data_root,
                 &name,
@@ -746,7 +461,8 @@ async fn session_load(
     AxumPath(name): AxumPath<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     validate_session_name(&name)?;
-    let target = checked_existing_session_path(&state.config.data_root, &name)?;
+    let target =
+        crate::management::server::checked_existing_session_path(&state.config.data_root, &name)?;
     if !target.is_dir() {
         return Err(ApiError::not_found(
             "session_not_found",
@@ -992,6 +708,20 @@ fn timestamped_event_json(event: &TimestampedEvent) -> Value {
     }
 }
 
+fn global_event_json(event: &GlobalTimestampedEvent) -> Value {
+    let mut value = timestamped_event_json(&TimestampedEvent {
+        timestamp_secs: event.timestamp_secs,
+        event: event.event.clone(),
+    });
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "aircraft_id".to_string(),
+            Value::String(event.aircraft_id.clone()),
+        );
+    }
+    value
+}
+
 fn aircraft_state_json(state: &pb::AircraftState) -> Value {
     let custom_fields = state
         .custom_fields
@@ -1060,336 +790,16 @@ fn vector_json(value: &pb::Vector3) -> Value {
     json!({"x": value.x, "y": value.y, "z": value.z})
 }
 
-fn validate_management_config(config: &ManagementConfig) -> Result<(), ManagementError> {
-    if !config.websocket_hz.is_finite() || config.websocket_hz <= 0.0 {
-        return Err(ManagementError::InvalidConfig(
-            "websocket_hz must be finite and greater than zero".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn json_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
-    body.map(|Json(body)| body)
-        .map_err(|error| ApiError::bad_request("invalid_json", error.body_text()))
-}
-
-fn query_body<T>(query: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
-    query
-        .map(|Query(query)| query)
-        .map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))
-}
-
-fn validate_session_name(name: &str) -> Result<(), ApiError> {
-    let valid = !name.is_empty()
-        && name.len() <= 128
-        && name != "."
-        && name != ".."
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
-    if valid {
-        Ok(())
-    } else {
-        Err(ApiError::bad_request(
-            "invalid_session_name",
-            "session name must match [A-Za-z0-9._-]{1,128} and cannot be . or ..",
-        ))
-    }
-}
-
-fn checked_existing_session_path(
-    data_root: &Path,
-    name: &str,
-) -> Result<std::path::PathBuf, ApiError> {
-    let target = data_root.join(name);
-    let metadata = fs::symlink_metadata(&target).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ApiError::not_found("session_not_found", "session directory not found")
-        } else {
-            ApiError::internal(error)
-        }
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(ApiError::bad_request(
-            "invalid_session_path",
-            "session symlinks are not allowed",
-        ));
-    }
-    let canonical_root = fs::canonicalize(data_root).map_err(ApiError::internal)?;
-    let canonical_target = fs::canonicalize(&target).map_err(ApiError::internal)?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(ApiError::bad_request(
-            "invalid_session_path",
-            "session path escapes the configured data root",
-        ));
-    }
-    Ok(canonical_target)
-}
-
-fn save_snapshot_atomic(
-    snapshot: &TimeSeriesStore,
-    data_root: &Path,
-    name: &str,
-    overwrite: bool,
-    operation_id: &str,
-) -> Result<(), crate::store::StoreError> {
-    let target = data_root.join(name);
-    let temporary = data_root.join(format!(".{name}.tmp-{operation_id}"));
-    let backup = data_root.join(format!(".{name}.bak-{operation_id}"));
-    if temporary.exists() {
-        fs::remove_dir_all(&temporary)?;
-    }
-    if let Err(error) = snapshot.save_to_disk(&temporary) {
-        let _ = fs::remove_dir_all(&temporary);
-        return Err(error);
-    }
-
-    if !target.exists() {
-        fs::rename(&temporary, &target)?;
-        return Ok(());
-    }
-    if !overwrite {
-        fs::remove_dir_all(&temporary)?;
-        return Err(crate::store::StoreError::InvalidData(
-            "session already exists".to_string(),
-        ));
-    }
-    if backup.exists() {
-        fs::remove_dir_all(&backup)?;
-    }
-    fs::rename(&target, &backup)?;
-    if let Err(error) = fs::rename(&temporary, &target) {
-        let _ = fs::rename(&backup, &target);
-        let _ = fs::remove_dir_all(&temporary);
-        return Err(error.into());
-    }
-    fs::remove_dir_all(&backup)?;
-    Ok(())
-}
-
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    code: &'static str,
-    message: String,
-    details: Option<Value>,
-}
-
-impl ApiError {
-    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code,
-            message: message.into(),
-            details: None,
-        }
-    }
-
-    fn not_found(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            code,
-            message: message.into(),
-            details: None,
-        }
-    }
-
-    fn conflict(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code,
-            message: message.into(),
-            details: None,
-        }
-    }
-
-    fn method_not_allowed(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::METHOD_NOT_ALLOWED,
-            code,
-            message: message.into(),
-            details: None,
-        }
-    }
-
-    fn internal(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
-            message: error.to_string(),
-            details: None,
-        }
-    }
-}
-
-impl From<PlaybackError> for ApiError {
-    fn from(error: PlaybackError) -> Self {
-        Self {
-            status: match error {
-                PlaybackError::EmptyStore => StatusCode::CONFLICT,
-                PlaybackError::InvalidTimestamp | PlaybackError::InvalidSpeed { .. } => {
-                    StatusCode::BAD_REQUEST
-                }
-            },
-            code: "playback_error",
-            message: error.to_string(),
-            details: None,
-        }
-    }
-}
-
-impl From<SeriesError> for ApiError {
-    fn from(error: SeriesError) -> Self {
-        let status = match error {
-            SeriesError::AircraftNotFound(_) => StatusCode::NOT_FOUND,
-            _ => StatusCode::BAD_REQUEST,
-        };
-        Self {
-            status,
-            code: "series_error",
-            message: error.to_string(),
-            details: None,
-        }
-    }
-}
-
-impl From<WorkspaceError> for ApiError {
-    fn from(error: WorkspaceError) -> Self {
-        let status = match error {
-            WorkspaceError::Io(_) | WorkspaceError::Json(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            WorkspaceError::TooLarge
-            | WorkspaceError::TooComplex
-            | WorkspaceError::InvalidValue => StatusCode::BAD_REQUEST,
-        };
-        Self {
-            status,
-            code: "workspace_error",
-            message: error.to_string(),
-            details: None,
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(json!({
-                "code": self.code,
-                "message": self.message,
-                "details": self.details,
-            })),
-        )
-            .into_response()
-    }
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::{to_bytes, Body};
-    use axum::http::Request;
+    use axum::http::header::CONTENT_TYPE;
+    use axum::http::{Request, StatusCode};
     use futures_util::{SinkExt, StreamExt};
     use tower::ServiceExt;
 
-    #[test]
-    fn validates_session_names() {
-        assert!(validate_session_name("flight-01.test").is_ok());
-        assert!(validate_session_name("../escape").is_err());
-        assert!(validate_session_name(".").is_err());
-        assert!(validate_session_name("").is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_session_symlinks_outside_data_root() {
-        use std::os::unix::fs::symlink;
-
-        let root = test_root("symlink-root");
-        let outside = test_root("symlink-outside");
-        fs::create_dir_all(&root).unwrap();
-        fs::create_dir_all(&outside).unwrap();
-        symlink(&outside, root.join("escape")).unwrap();
-        assert!(checked_existing_session_path(&root, "escape").is_err());
-        let _ = fs::remove_dir_all(root);
-        let _ = fs::remove_dir_all(outside);
-    }
-
-    #[test]
-    fn ingestion_gate_counts_dropped_messages() {
-        let gate = IngestionGate::new();
-        gate.with_paused(|| assert!(gate.with_ingestion(|| ()).is_none()));
-        assert!(gate.with_ingestion(|| ()).is_some());
-        assert_eq!(gate.dropped_count(), 1);
-    }
-
-    #[test]
-    fn persistence_operations_are_serialized() {
-        let operations = OperationManager::new();
-        let first = operations.begin("save", "first").unwrap();
-        assert!(operations.begin("load", "second").is_err());
-        operations.update(&first.id, OperationState::Succeeded, None);
-        assert!(operations.begin("load", "second").is_ok());
-    }
-
-    fn test_root(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "fly-ruler-management-{label}-{}",
-            Uuid::new_v4().simple()
-        ))
-    }
-
-    fn test_state(root: std::path::PathBuf) -> AppState {
-        fs::create_dir_all(&root).unwrap();
-        let store = Arc::new(TimeSeriesStore::new());
-        store.append_event(
-            "aircraft-1".to_string(),
-            1.0,
-            Event::Spawn(Box::new(pb::AircraftSpawnInfo {
-                name: "test".to_string(),
-                toml_config: String::new(),
-                initial_state: None,
-            })),
-        );
-        store.append_state(
-            "aircraft-1".to_string(),
-            2.0,
-            pb::AircraftState {
-                position: Some(pb::Vector3 {
-                    x: 1.0,
-                    y: 2.0,
-                    z: 3.0,
-                }),
-                ..Default::default()
-            },
-        );
-        let playback = Arc::new(PlaybackController::new(
-            Arc::clone(&store),
-            crate::ReplayConfig::default(),
-        ));
-        let workspace = Arc::new(WorkspaceStore::new(&root));
-        AppState {
-            store,
-            playback,
-            ingestion: Arc::new(IngestionGate::new()),
-            sessions: Arc::new(AsyncRwLock::new(None)),
-            config: ManagementConfig {
-                data_root: root,
-                websocket_hz: 120.0,
-                ..ManagementConfig::default()
-            },
-            operations: OperationManager::new(),
-            workspace,
-            shutdown: CancellationToken::new(),
-        }
-    }
+    use crate::management::server::{ManagementServerRuntime, OperationRecord};
 
     async fn response_json(response: Response) -> Value {
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
@@ -1398,8 +808,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_routes_validate_queries_and_mutate_playback() {
-        let root = test_root("http");
-        let state = test_state(root.clone());
+        let root = crate::management::server::test_root("http");
+        let state = crate::management::server::test_state(root.clone());
         let app = router(state.clone());
 
         let response = app
@@ -1460,6 +870,22 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
+                    .uri("/api/v1/timeline/events?start=0&end=3&offset=0&limit=100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let timeline = response_json(response).await;
+        assert_eq!(timeline["total"], 1);
+        assert_eq!(timeline["items"][0]["aircraft_id"], "aircraft-1");
+        assert_eq!(timeline["items"][0]["event_type"], "spawn");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
                     .uri("/api/v1/does-not-exist")
                     .body(Body::empty())
                     .unwrap(),
@@ -1486,11 +912,13 @@ mod tests {
 
     #[tokio::test]
     async fn cors_allows_default_localhost_origin() {
+        use axum::http::header::ORIGIN;
         use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_METHOD};
+        use axum::http::Method;
 
-        let root = test_root("cors");
-        let state = test_state(root.clone());
-        let app = configured_router(state).unwrap();
+        let root = crate::management::server::test_root("cors");
+        let state = crate::management::server::test_state(root.clone());
+        let app = crate::management::server::configured_router(state).unwrap();
         let response = app
             .oneshot(
                 Request::builder()
@@ -1513,14 +941,19 @@ mod tests {
 
     #[tokio::test]
     async fn serves_spa_assets_but_keeps_api_errors_json() {
-        let root = test_root("static");
+        let root = crate::management::server::test_root("static");
         let web_root = root.join("web");
         fs::create_dir_all(web_root.join("assets")).unwrap();
-        fs::write(web_root.join("index.html"), b"<main>FlyRuler</main>").unwrap();
+        fs::write(
+            web_root.join("index.html"),
+            b"<main>FlyRuler</main><script type=\"application/json\">__FLY_RULER_RUNTIME_CONFIG__</script>",
+        )
+        .unwrap();
         fs::write(web_root.join("assets/app.js"), b"console.log('ok')").unwrap();
-        let mut state = test_state(root.clone());
+        let mut state = crate::management::server::test_state(root.clone());
         state.config.web_root = Some(web_root);
-        let app = configured_router(state).unwrap();
+        state.config.public_api_base_url = Some("https://example.test/<unsafe>/api/v1".to_string());
+        let app = crate::management::server::configured_router(state).unwrap();
 
         let asset = app
             .clone()
@@ -1546,7 +979,10 @@ mod tests {
             .unwrap();
         assert_eq!(fallback.status(), StatusCode::OK);
         let fallback_body = to_bytes(fallback.into_body(), 1024).await.unwrap();
-        assert_eq!(&fallback_body[..], b"<main>FlyRuler</main>");
+        let fallback_body = String::from_utf8(fallback_body.to_vec()).unwrap();
+        assert!(fallback_body.contains("<main>FlyRuler</main>"));
+        assert!(fallback_body.contains("https://example.test/\\u003cunsafe\\u003e/api/v1"));
+        assert!(!fallback_body.contains(crate::management::server::WEB_CONFIG_SENTINEL));
 
         let api_error = app
             .oneshot(
@@ -1579,8 +1015,8 @@ mod tests {
 
     #[tokio::test]
     async fn async_save_clear_load_roundtrip_is_transactional() {
-        let root = test_root("persistence");
-        let state = test_state(root.clone());
+        let root = crate::management::server::test_root("persistence");
+        let state = crate::management::server::test_state(root.clone());
         let app = router(state.clone());
 
         let response = app
@@ -1662,8 +1098,8 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_is_read_only_and_emits_snapshots() {
-        let root = test_root("websocket");
-        let state = test_state(root.clone());
+        let root = crate::management::server::test_root("websocket");
+        let state = crate::management::server::test_state(root.clone());
         let mut runtime = ManagementServerRuntime::start(
             "127.0.0.1:0",
             state.config.clone(),

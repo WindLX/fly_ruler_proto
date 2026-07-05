@@ -12,32 +12,52 @@ const MAX_WORKSPACE_BYTES: usize = 1024 * 1024;
 const MAX_CHARTS: usize = 64;
 const MAX_CURVES_PER_CHART: usize = 64;
 
+/// Color theme for the management console.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceTheme {
-    Light,
+    /// Light color scheme.
     #[default]
+    Light,
+    /// Dark color scheme.
     Dark,
 }
 
+/// Visual styling for one curve inside a chart.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceCurveStyle {
+    /// Aircraft that owns the series.
     pub aircraft_id: String,
+    /// Field selector for the series.
     pub selector: SeriesSelector,
+    /// Display name override; empty means use the catalog label.
     pub alias: String,
+    /// Hex color such as `#4b92f0`.
     pub color: String,
+    /// Line style: `solid`, `dashed`, or `dotted`.
     pub line_pattern: String,
+    /// Line width in pixels.
     pub line_width: f64,
+    /// Opacity from 0.0 to 1.0.
     pub opacity: f64,
+    /// Whether the curve is currently visible.
     pub visible: bool,
+    /// Y-axis side: `left` or `right`.
     pub y_axis: String,
+    /// Whether to smooth the line.
     pub smooth: bool,
+    /// Whether to show symbols at each data point.
     pub show_symbol: bool,
+    /// Scale factor applied to raw values.
     pub scale: f64,
+    /// Offset applied after scaling.
     pub offset: f64,
+    /// Optional unit override; empty means use the catalog unit.
     pub unit: Option<String>,
+    /// Number format: `auto`, `fixed`, or `scientific`.
     pub value_format: String,
+    /// Decimal precision for value labels.
     pub precision: u8,
 }
 
@@ -66,26 +86,41 @@ impl Default for WorkspaceCurveStyle {
     }
 }
 
+/// Zoom and viewport state for a single chart.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceChartView {
+    /// Optional start timestamp ratio for zoom (0.0..=1.0).
     pub zoom_start: Option<f64>,
+    /// Optional end timestamp ratio for zoom (0.0..=1.0).
     pub zoom_end: Option<f64>,
+    /// Optional fixed start timestamp for zoom.
     pub zoom_start_value: Option<f64>,
+    /// Optional fixed end timestamp for zoom.
     pub zoom_end_value: Option<f64>,
 }
 
+/// One chart tile in the workspace dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceChart {
+    /// Stable chart identifier.
     pub id: String,
+    /// Display title.
     pub title: String,
+    /// Grid x position.
     pub x: i32,
+    /// Grid y position.
     pub y: i32,
+    /// Grid width in columns.
     pub w: u32,
+    /// Grid height in rows.
     pub h: u32,
+    /// Whether the chart legend is visible.
     pub legend_visible: bool,
+    /// Curves drawn on this chart.
     pub curves: Vec<WorkspaceCurveStyle>,
+    /// Viewport state.
     pub view: WorkspaceChartView,
 }
 
@@ -105,22 +140,37 @@ impl Default for WorkspaceChart {
     }
 }
 
+/// Full workspace snapshot saved by the management console.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceSnapshot {
+    /// Schema version; currently 1.
     pub version: u32,
+    /// Active color theme.
     pub theme: WorkspaceTheme,
+    /// UI locale such as `zh-CN`.
     pub locale: String,
+    /// Whether the left panel is open.
     pub left_panel_open: bool,
+    /// Whether the right panel is open.
     pub right_panel_open: bool,
+    /// Whether the curve basket is open.
     pub basket_open: bool,
+    /// Currently selected aircraft, if any.
     pub selected_aircraft_id: Option<String>,
+    /// Currently selected chart, if any.
     pub selected_chart_id: Option<String>,
+    /// Whether charts share a synchronized time axis.
     pub sync_charts: bool,
+    /// Optional global query start timestamp.
     pub query_start: Option<f64>,
+    /// Optional global query end timestamp.
     pub query_end: Option<f64>,
+    /// Default down-sampling target for series queries.
     pub max_points: usize,
+    /// Dashboard charts.
     pub charts: Vec<WorkspaceChart>,
+    /// Curves held in the basket for quick add.
     pub basket: Vec<WorkspaceCurveStyle>,
 }
 
@@ -145,27 +195,38 @@ impl Default for WorkspaceSnapshot {
     }
 }
 
+/// Persisted workspace document including revision metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceDocument {
+    /// Monotonic revision counter incremented on each save.
     pub revision: u64,
+    /// Last modification timestamp in seconds.
     pub updated_at_secs: f64,
+    /// Saved workspace snapshot.
     pub workspace: WorkspaceSnapshot,
 }
 
+/// Errors that can occur while loading or saving a workspace.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
+    /// Filesystem I/O failure.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// JSON serialization or deserialization failure.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    /// The workspace document exceeds the maximum size.
     #[error("workspace document is too large")]
     TooLarge,
+    /// The workspace contains too many charts or curves.
     #[error("workspace contains too many charts or curves")]
     TooComplex,
+    /// The workspace contains invalid numeric or enum values.
     #[error("workspace contains invalid numeric or enum values")]
     InvalidValue,
 }
 
+/// Atomic file-backed store for a single workspace snapshot.
 pub struct WorkspaceStore {
     path: PathBuf,
     revision: AtomicU64,
@@ -173,6 +234,7 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
+    /// Create a new store that persists under `{data_root}/.fly-ruler/workspace.json`.
     pub fn new(data_root: &Path) -> Self {
         let path = data_root.join(".fly-ruler").join("workspace.json");
         let revision = fs::read(&path)
@@ -186,6 +248,7 @@ impl WorkspaceStore {
         }
     }
 
+    /// Load the persisted workspace document, if one exists.
     pub fn load(&self) -> Result<Option<WorkspaceDocument>, WorkspaceError> {
         match fs::read(&self.path) {
             Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -194,6 +257,7 @@ impl WorkspaceStore {
         }
     }
 
+    /// Validate and atomically save a workspace snapshot.
     pub fn save(&self, workspace: WorkspaceSnapshot) -> Result<WorkspaceDocument, WorkspaceError> {
         validate(&workspace)?;
         let _writer = lock_unpoisoned(&self.writer);
