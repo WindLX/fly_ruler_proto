@@ -1,7 +1,6 @@
 # FlyRuler MSFS 2024 Bridge
 
-This crate builds a Windows sidecar that receives FlyRuler UDP state and drives
-the current Microsoft Flight Simulator 2024 user aircraft through SimConnect.
+This crate builds a Windows sidecar that receives FlyRuler UDP state and drives the current Microsoft Flight Simulator 2024 user aircraft through SimConnect.
 It is intended to run under the same Steam/Proton prefix as MSFS.
 
 ## SDK layout
@@ -36,20 +35,29 @@ target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe
 target/x86_64-pc-windows-msvc/debug/SimConnect.dll
 ```
 
+To build the same self-contained archive produced by CI:
+
+```bash
+just package-msfs
+```
+
+The output at `dist/fly-ruler-msfs-windows-x86_64.zip` includes the bridge, SimConnect runtime, example TOML, this README, the repository license, release guide, `SHA256SUMS`, and the tested production Web console under `web/dist`.
+
 ## Run
 
 1. Start MSFS 2024 and enter a Free Flight with Active Pause disabled.
-2. Start the bridge in the MSFS Proton prefix:
+2. Start the bridge in the MSFS Proton prefix. For a release archive, first change into the extracted `fly-ruler-msfs` directory so the bundled `web/dist` is discovered automatically:
 
-   ```bash
-   uv tool install protontricks
-   protontricks-launch --appid 2537590 \
-     target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe
-   ```
+```bash
+cd fly-ruler-msfs
+uv tool install protontricks
+protontricks-launch --appid 2537590 \
+  ./fly-ruler-msfs-bridge.exe
+```
 
-   `protontricks-launch` can emit a missing-`winetricks` warning when only its
-   launcher functionality is used. This is non-fatal if the bridge proceeds to
-   print `SimConnect connected`.
+   For a source-tree debug build, use `target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe` instead.
+
+   `protontricks-launch` can emit a missing-`winetricks` warning when only its launcher functionality is used. This is non-fatal if the bridge proceeds to print `SimConnect connected`.
 
 3. In another terminal, install the Python binding and start the demo:
 
@@ -85,6 +93,8 @@ Useful options:
 Unless `--no-http` is supplied, the bridge embeds the same management service as `fly-ruler-server`. REST playback commands immediately affect SimConnect:
 Live follows the newest sample, paused replay writes a seek exactly once, and playing replay advances using previous-value hold. A seek, load, clear, or other playback revision forces an explicit SimConnect refresh even when the selected sample has the same timestamp.
 
+Release archives already contain `web/dist`; when launched from the extraction root, open `http://127.0.0.1:18003/` to use the management console. If the bridge is launched from another directory, pass `--web-root /absolute/path/to/fly-ruler-msfs/web/dist`.
+
 ## TOML configuration and logging
 
 Copy `fly-ruler-msfs.example.toml` to `fly-ruler-msfs.toml`, or pass a custom path through `--config`. If `--config` is omitted, the bridge automatically loads `fly-ruler-msfs.toml` from the current directory when it exists.
@@ -108,6 +118,32 @@ The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the 
 - `engines`: engine indices `1..=4` with throttle lever ratios in `0..=1`.
 
 The bridge writes `AIRSPEED TRUE RAW`, reconstructed MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed engine throttles. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments. `derived.ias/cas/mach` remain protocol telemetry and are not written directly.
+
+## Landing-gear events
+
+The bridge reserves two exact custom event names:
+
+```text
+flyruler.control.gear_up
+flyruler.control.gear_down
+```
+
+They move the MSFS landing-gear handle through the `GEAR_UP` and `GEAR_DOWN` SimConnect events. No protobuf schema extension is required:
+
+```python
+client.create_event("flyruler.control.gear_up", timestamp=time.time())
+client.create_event("flyruler.control.gear_down", timestamp=time.time())
+```
+
+Live mode applies newly received commands idempotently. Replay emits commands crossed by the global cursor in timestamp order. A seek, session load, playback revision, or aircraft reselection reapplies the last gear command at or before the cursor so the rendered aircraft matches the recorded timeline. If no gear event exists before the cursor, the bridge leaves the current MSFS gear state unchanged.
+
+For an end-to-end visual test, run:
+
+```bash
+uv run python examples/demo_msfs_client.py --gear-cycle-secs 8
+```
+
+The CI/CD and artifact layout are documented in the repository root `RELEASING.md`; release archives include a copy beside this README.
 
 For compatibility with older clients, these optional custom fields are used only when the corresponding `control_surfaces` field is absent:
 

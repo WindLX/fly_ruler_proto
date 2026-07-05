@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -8,6 +9,7 @@ import { formatAbsoluteTime, formatRelativeTime, niceTickStep, toRelativeTime } 
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
+const { t } = useI18n()
 const track = ref<HTMLElement | null>(null)
 const preview = ref(0)
 const dragging = ref(false)
@@ -117,7 +119,7 @@ function eventTitle(cluster: (typeof eventClusters.value)[number]): string {
     .slice(0, 8)
     .map(
       (event) =>
-        `${formatRelativeTime(toRelativeTime(event.timestamp_secs, bounds.value[0]))} · ${event.event_type} · ${event.aircraft_id ?? ''} ${event.name ?? event.reason ?? ''}`,
+        `${formatRelativeTime(toRelativeTime(event.timestamp_secs, bounds.value[0]))} · ${t(`events.${event.event_type}`)} · ${event.aircraft_id ?? ''} ${event.name ?? event.reason ?? ''}`,
     )
     .join('\n')
 }
@@ -131,18 +133,26 @@ onBeforeUnmount(() => {
 <template>
   <footer class="timeline border-t border-(--border-color) bg-(--panel-bg) px-3 py-2">
     <div class="mb-1 flex items-center gap-2 text-xs">
-      <button class="icon-button h-7 w-7" title="Previous event" @click="jumpEvent(-1)">
+      <button
+        class="icon-button h-7 w-7"
+        :title="t('timeline.previousEvent')"
+        @click="jumpEvent(-1)"
+      >
         <ChevronLeft class="h-4 w-4" />
       </button>
-      <button class="icon-button h-7 w-7" title="Next event" @click="jumpEvent(1)">
+      <button class="icon-button h-7 w-7" :title="t('timeline.nextEvent')" @click="jumpEvent(1)">
         <ChevronRight class="h-4 w-4" />
       </button>
       <span class="mono font-semibold">{{ formatRelativeTime(preview - bounds[0]) }}</span>
       <span class="text-(--text-muted)">{{
         formatAbsoluteTime(preview, workspace.workspace.locale)
       }}</span>
-      <span v-if="server.timelineTruncated" class="text-amber-500">event list truncated</span>
-      <button class="toolbar-button ml-auto" @click="setQueryRange">Full range</button>
+      <span v-if="server.timelineTruncated" class="text-amber-500">{{
+        t('timeline.truncated')
+      }}</span>
+      <button class="toolbar-button ml-auto" @click="setQueryRange">
+        {{ t('timeline.fullRange') }}
+      </button>
     </div>
 
     <div

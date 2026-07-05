@@ -1,6 +1,8 @@
-# Fly Ruler Protocol Python Bindings（中文文档）
+# Fly Ruler Protocol Python Bindings
 
 本目录提供 `fly_ruler_proto_core` 的 Python 绑定，基于 **PyO3** 与 **maturin** 构建。它面向飞行模拟的数据发送端，将一架飞行器的完整生命周期封装为高层的 Python API，让 Python 脚本能够以最小网络细节向 Godot 或 Rust 服务端推送飞行器状态与事件。
+
+Python wheels、Linux server 和自带 Web 控制台的 MSFS zip 由同一 tag workflow 发布，详见 [`../../RELEASING.md`](../../RELEASING.md)。
 
 ## 1. 定位与架构
 
@@ -228,6 +230,13 @@ client.create_event("missile_launch", timestamp=123.456)
 
 发送自定义事件。
 
+MSFS bridge 识别两个标准起落架事件：
+
+```python
+client.create_event("flyruler.control.gear_up")
+client.create_event("flyruler.control.gear_down")
+```
+
 #### `despawn(reason=None, timestamp=None)`
 
 ```python
@@ -411,7 +420,7 @@ build-backend = "maturin"
 
 [project]
 name = "fly_ruler_proto_python"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.10"
 ```
 

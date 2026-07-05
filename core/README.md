@@ -1,4 +1,4 @@
-# Fly Ruler Protocol Kernel（中文文档）
+# Fly Ruler Protocol Kernel
 
 `fly_ruler_proto_core` 是 Fly Ruler 协议的内核实现，面向航空航天飞行模拟场景，提供高性能的二进制协议序列化、UDP 网络传输、时序数据存储、HTTP/WebSocket 管理接口与全局回放时间线。
 
@@ -492,6 +492,11 @@ pub struct RuntimeConfig {
     pub logging: LoggingConfig,
 }
 ```
+
+生产前端不会嵌入 Rust binary。Release CI 只构建一次 `web/dist`，随后把
+同一份产物放入 Linux server 和 MSFS 发布包。进程从解压目录启动时，
+默认 `web_root` 可直接托管控制台；完整目录契约见
+[`../RELEASING.md`](../RELEASING.md)。
 
 ### 4.7 HTTP、WebSocket 与回放
 

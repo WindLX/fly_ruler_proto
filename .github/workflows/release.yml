@@ -39,6 +39,8 @@ jobs:
         with:
           name: web-dist
           path: web/dist
+          if-no-files-found: error
+          retention-days: 7
 
   # ============================================================
   # Server: Linux daemon plus its production Web assets
@@ -53,6 +55,11 @@ jobs:
         with:
           name: web-dist
           path: web/dist
+      - name: Verify downloaded Web assets
+        run: |
+          test -f web/dist/index.html
+          test -n "$(find web/dist/assets -maxdepth 1 -type f -name '*.js' -print -quit)"
+          test -n "$(find web/dist/assets -maxdepth 1 -type f -name '*.css' -print -quit)"
       - name: Build daemon
         run: cargo build -p fly_ruler_proto_server --release
       - name: Stage daemon bundle
@@ -60,12 +67,23 @@ jobs:
           mkdir -p stage/fly-ruler-server/web
           cp target/release/fly-ruler-server stage/fly-ruler-server/
           cp -R web/dist stage/fly-ruler-server/web/
-          cp server/README.md LICENSE stage/fly-ruler-server/
+          cp server/README.md LICENSE RELEASING.md stage/fly-ruler-server/
           tar -C stage -czf fly-ruler-server-linux-x86_64.tar.gz fly-ruler-server
+      - name: Verify server release archive
+        run: |
+          tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
+            | grep -Fx 'fly-ruler-server/fly-ruler-server'
+          tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
+            | grep -Fx 'fly-ruler-server/web/dist/index.html'
+          tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
+            | grep -Eq '^fly-ruler-server/web/dist/assets/.+\.js$'
+          tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
+            | grep -Eq '^fly-ruler-server/web/dist/assets/.+\.css$'
       - uses: actions/upload-artifact@v4
         with:
           name: server-bundle
           path: fly-ruler-server-linux-x86_64.tar.gz
+          if-no-files-found: error
 
   # ============================================================
   # Core: package source (.crate) for GitHub Release
@@ -201,11 +219,8 @@ jobs:
   # Required: MSFS 2024 SDK cached in .msfs2024-sdk/
   #
   # To seed the cache:
-  #   1. Extract the MSI locally:
-  #      msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi \
-  #        --directory .msfs2024-sdk
-  #   2. Upload .msfs2024-sdk as a GitHub Actions cache with key
-  #      "msfs2024-sdk-1.6.9-linux-v1"
+  #   Run the "Seed MSFS SDK cache" workflow on the self-hosted
+  #   runner tagged with msfs-sdk.
   # ============================================================
   build-msfs:
     name: Build MSFS bridge (Windows cross-compile)
@@ -217,10 +232,15 @@ jobs:
         with:
           name: web-dist
           path: web/dist
+      - name: Verify downloaded Web assets
+        run: |
+          test -f web/dist/index.html
+          test -n "$(find web/dist/assets -maxdepth 1 -type f -name '*.js' -print -quit)"
+          test -n "$(find web/dist/assets -maxdepth 1 -type f -name '*.css' -print -quit)"
       - name: Install LLVM archive tool
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-18
+          sudo apt-get install -y llvm-18 zip unzip
           sudo ln -sf /usr/bin/llvm-lib-18 /usr/local/bin/llvm-lib
           command -v llvm-lib
       - name: Install Windows Rust target
@@ -237,9 +257,8 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           echo "::error::MSFS 2024 SDK cache miss."
-          echo "::error::Please extract the SDK locally and seed the cache."
-          echo "::error::  msiextract .sdk-installer/MSFS2024_SDK_Core_Installer_1.6.9/*.msi --directory .msfs2024-sdk"
-          echo "::error::Then upload .msfs2024-sdk as a cache with key 'msfs2024-sdk-1.6.9-linux-v1'"
+          echo "::error::Run the 'Seed MSFS SDK cache' workflow on the self-hosted msfs-sdk runner."
+          echo "::error::Expected cache key: msfs2024-sdk-1.6.9-linux-v1"
           exit 1
       - name: Set MSFS SDK environment variable
         run: echo "MSFS2024_SDK=$(pwd)/.msfs2024-sdk/MSFS 2024 SDK" >> $GITHUB_ENV
@@ -247,19 +266,34 @@ jobs:
         run: cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --release
       - name: Stage MSFS bundle
         run: |
-          mkdir -p stage/fly-ruler-msfs/web
-          cp target/x86_64-pc-windows-msvc/release/fly-ruler-msfs-bridge.exe stage/fly-ruler-msfs/
-          cp target/x86_64-pc-windows-msvc/release/SimConnect.dll stage/fly-ruler-msfs/
-          cp bindings/msfs/fly-ruler-msfs.example.toml stage/fly-ruler-msfs/
-          cp bindings/msfs/README.md stage/fly-ruler-msfs/
-          cp -R web/dist stage/fly-ruler-msfs/web/
+          scripts/package_msfs_bundle.sh release stage/fly-ruler-msfs
           cd stage
           zip -r ../fly-ruler-msfs-windows-x86_64.zip fly-ruler-msfs
+      - name: Verify MSFS release archive
+        run: |
+          unzip -t fly-ruler-msfs-windows-x86_64.zip
+          for path in \
+            fly-ruler-msfs/fly-ruler-msfs-bridge.exe \
+            fly-ruler-msfs/SimConnect.dll \
+            fly-ruler-msfs/fly-ruler-msfs.example.toml \
+            fly-ruler-msfs/README.md \
+            fly-ruler-msfs/RELEASING.md \
+            fly-ruler-msfs/LICENSE \
+            fly-ruler-msfs/SHA256SUMS \
+            fly-ruler-msfs/web/dist/index.html
+          do
+            unzip -Z1 fly-ruler-msfs-windows-x86_64.zip | grep -Fx "${path}"
+          done
+          unzip -Z1 fly-ruler-msfs-windows-x86_64.zip \
+            | grep -Eq '^fly-ruler-msfs/web/dist/assets/.+\.js$'
+          unzip -Z1 fly-ruler-msfs-windows-x86_64.zip \
+            | grep -Eq '^fly-ruler-msfs/web/dist/assets/.+\.css$'
       - name: Upload MSFS bundle
         uses: actions/upload-artifact@v4
         with:
           name: msfs-bundle
           path: fly-ruler-msfs-windows-x86_64.zip
+          if-no-files-found: error
 
   # ============================================================
   # Python: publish wheels to PyPI

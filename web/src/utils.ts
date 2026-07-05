@@ -1,5 +1,6 @@
 import type {
   AircraftState,
+  ChartModel,
   CurveStyle,
   SeriesCatalogItem,
   SeriesSelector,
@@ -61,6 +62,59 @@ export function defaultWorkspace(): WorkspaceSnapshot {
     charts: [],
     basket: [],
   }
+}
+
+export function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
+  const normalized = JSON.parse(JSON.stringify(workspace)) as WorkspaceSnapshot
+  normalized.query_start = finiteOrNull(normalized.query_start)
+  normalized.query_end = finiteOrNull(normalized.query_end)
+  if (
+    normalized.query_start !== null &&
+    normalized.query_end !== null &&
+    normalized.query_start > normalized.query_end
+  ) {
+    normalized.query_start = null
+    normalized.query_end = null
+  }
+  for (const chart of normalized.charts) {
+    chart.view = normalizeChartView(chart.view)
+  }
+  return normalized
+}
+
+export function normalizeChartView(
+  view: ChartModel['view'] | null | undefined,
+): ChartModel['view'] {
+  if (!view) return {}
+  return Object.fromEntries(
+    Object.entries(view).filter((entry): entry is [string, number] => Number.isFinite(entry[1])),
+  ) as ChartModel['view']
+}
+
+export function effectiveTimeRange(
+  start: number | null,
+  end: number | null,
+  bounds: [number, number] | null,
+): { start: number; end: number } | null {
+  if (
+    start === null ||
+    end === null ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start > end ||
+    !bounds
+  ) {
+    return null
+  }
+  if (end < bounds[0] || start > bounds[1]) return null
+  return {
+    start: Math.max(start, bounds[0]),
+    end: Math.min(end, bounds[1]),
+  }
+}
+
+function finiteOrNull(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 export function formatNumber(

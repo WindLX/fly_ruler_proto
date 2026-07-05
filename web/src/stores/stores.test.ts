@@ -74,4 +74,31 @@ describe('dashboard stores', () => {
       zoom_end_value: 20,
     })
   })
+
+  it('reconciles stale time ranges and single-aircraft curve bindings', () => {
+    const store = useWorkspaceStore()
+    store.workspace.selected_aircraft_id = 'old-aircraft'
+    store.workspace.query_start = 0
+    store.workspace.query_end = 1
+    store.workspace.charts = [
+      {
+        id: 'chart',
+        title: 'Chart',
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 4,
+        legend_visible: true,
+        curves: [{ ...curve, aircraft_id: 'old-aircraft' }],
+        view: {},
+      },
+    ]
+
+    store.reconcileDataContext(['new-aircraft'], [100, 200])
+
+    expect(store.workspace.selected_aircraft_id).toBe('new-aircraft')
+    expect(store.workspace.charts[0]?.curves[0]?.aircraft_id).toBe('new-aircraft')
+    expect(store.workspace.query_start).toBeNull()
+    expect(store.workspace.query_end).toBeNull()
+  })
 })

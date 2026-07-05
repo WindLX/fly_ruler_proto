@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   defaultWorkspace,
+  effectiveTimeRange,
   extractValue,
   formatAbsoluteTime,
   formatNumber,
   formatRelativeTime,
   niceTickStep,
+  normalizeWorkspace,
   selectorKey,
   toAbsoluteTime,
   toRelativeTime,
@@ -45,5 +47,27 @@ describe('series helpers', () => {
     expect(formatAbsoluteTime(12.5)).toBe('t=00:12.500')
     expect(formatAbsoluteTime(1_800_000_000)).not.toContain('1800000000')
     expect(niceTickStep(92, 8)).toBe(20)
+  })
+
+  it('drops stale query ranges and normalizes null chart zoom values', () => {
+    expect(effectiveTimeRange(0, 1, [1_783_245_238, 1_783_245_267])).toBeNull()
+    expect(effectiveTimeRange(5, 15, [10, 20])).toEqual({ start: 10, end: 15 })
+
+    const workspace = defaultWorkspace()
+    workspace.charts.push({
+      id: 'chart',
+      title: 'Chart',
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 5,
+      legend_visible: true,
+      curves: [],
+      view: {
+        zoom_start: null,
+        zoom_end_value: null,
+      } as never,
+    })
+    expect(normalizeWorkspace(workspace).charts[0]?.view).toEqual({})
   })
 })

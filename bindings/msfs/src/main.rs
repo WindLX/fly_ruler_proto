@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use fly_ruler_proto_core::{init_logging, KernelRuntime, PlaybackMode, TimeSeriesStore};
     use fly_ruler_proto_msfs::{
         frame_from_state, optional_field_warnings, select_aircraft_at, BridgeSession,
+        GearEventTracker,
     };
     use simconnect::{SimConnectClient, SimConnectError};
     use tracing::{error, info, warn};
@@ -86,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_new_sample: Option<Instant> = None;
         let mut stale_reported = false;
         let mut last_optional_warnings = Vec::new();
+        let mut gear_events = GearEventTracker::default();
         let mut reconnect = false;
 
         while running.load(Ordering::SeqCst) {
@@ -121,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     last_new_sample = None;
                     stale_reported = false;
                     last_optional_warnings.clear();
+                    gear_events.reset();
                 }
             }
 
@@ -133,6 +136,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Some(id) = selected.as_ref() {
+                if let Some(cursor_secs) = playback_state.cursor_secs {
+                    for command in gear_events.commands_to_apply(
+                        &store,
+                        id,
+                        playback_state.mode,
+                        cursor_secs,
+                        playback_state.revision,
+                    ) {
+                        if let Err(error) = session.apply_gear_command(command) {
+                            error!(
+                                target: "fly_ruler_proto_msfs.bridge",
+                                %error,
+                                aircraft_id = id,
+                                ?command,
+                                "failed to write MSFS landing gear command"
+                            );
+                            reconnect = true;
+                            break;
+                        }
+                        info!(
+                            target: "fly_ruler_proto_msfs.bridge",
+                            aircraft_id = id,
+                            ?command,
+                            "applied MSFS landing gear command"
+                        );
+                    }
+                    if reconnect {
+                        break;
+                    }
+                }
+
                 if let Some(resolved) = playback.resolve_aircraft_with(&playback_state, id) {
                     let sample = resolved.sample;
                     let sample_key = (sample.timestamp_secs.to_bits(), playback_state.revision);

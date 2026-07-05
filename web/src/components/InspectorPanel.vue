@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Eye, EyeOff, Trash2 } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -8,6 +9,7 @@ import { formatAbsoluteTime, formatRelativeTime } from '@/utils'
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
+const { t } = useI18n()
 const chart = computed(() => workspace.selectedChart)
 const events = computed(() => {
   const id = workspace.workspace.selected_aircraft_id
@@ -17,6 +19,10 @@ const sample = computed(() => {
   const id = workspace.workspace.selected_aircraft_id
   return id ? server.samples[id] : null
 })
+
+function eventLabel(eventType: string): string {
+  return t(`events.${eventType}`)
+}
 </script>
 
 <template>
@@ -24,7 +30,7 @@ const sample = computed(() => {
     class="panel-surface flex min-h-0 w-86 shrink-0 scrollbar-thin flex-col overflow-y-auto rounded-lg"
   >
     <section class="border-b border-(--border-color) p-3">
-      <h2 class="tool-label">Current state</h2>
+      <h2 class="section-title">{{ t('inspector.currentState') }}</h2>
       <div v-if="sample" class="mt-2 space-y-2 text-xs">
         <div class="mono text-(--text-muted)">
           {{
@@ -36,39 +42,39 @@ const sample = computed(() => {
         </div>
         <pre class="state-json scrollbar-thin">{{ JSON.stringify(sample.state, null, 2) }}</pre>
       </div>
-      <p v-else class="mt-2 text-xs text-(--text-muted)">No selected aircraft sample.</p>
+      <p v-else class="empty-copy">{{ t('inspector.noSample') }}</p>
     </section>
 
     <section class="border-b border-(--border-color) p-3">
-      <h2 class="tool-label">Events</h2>
+      <h2 class="section-title">{{ t('inspector.events') }}</h2>
       <div v-if="events.length" class="mt-2 space-y-1">
         <div
           v-for="event in events"
           :key="`${event.timestamp_secs}:${event.event_type}`"
-          class="flex gap-2 rounded border border-(--border-color) bg-(--card-bg) px-2 py-1.5 text-xs"
+          class="event-row"
         >
           <span class="mono text-(--text-muted)">{{
             formatRelativeTime(
               event.timestamp_secs - (server.playback?.bounds?.[0] ?? event.timestamp_secs),
             )
           }}</span>
-          <strong>{{ event.event_type }}</strong>
+          <strong>{{ eventLabel(event.event_type) }}</strong>
           <span class="min-w-0 truncate text-(--text-secondary)">{{
             event.name ?? event.reason ?? ''
           }}</span>
         </div>
       </div>
-      <p v-else class="mt-2 text-xs text-(--text-muted)">No lifecycle events.</p>
+      <p v-else class="empty-copy">{{ t('inspector.noEvents') }}</p>
     </section>
 
     <section v-if="chart" class="p-3">
-      <h2 class="tool-label">Chart inspector</h2>
+      <h2 class="section-title">{{ t('inspector.chart') }}</h2>
       <label class="field-label mt-3">
-        Title
+        {{ t('inspector.title') }}
         <input v-model="chart.title" class="toolbar-input w-full" />
       </label>
       <label class="mt-2 flex items-center gap-2 text-xs">
-        <input v-model="chart.legend_visible" type="checkbox" />Show legend
+        <input v-model="chart.legend_visible" type="checkbox" />{{ t('inspector.showLegend') }}
       </label>
 
       <article
@@ -83,32 +89,55 @@ const sample = computed(() => {
             class="h-7 w-8 cursor-pointer border-0 bg-transparent"
           />
           <input v-model="curve.alias" class="toolbar-input min-w-0 flex-1" />
-          <button class="icon-button h-7 w-7" @click="curve.visible = !curve.visible">
+          <button
+            class="icon-button h-7 w-7"
+            :title="curve.visible ? t('inspector.hideCurve') : t('inspector.showCurve')"
+            @click="curve.visible = !curve.visible"
+          >
             <Eye v-if="curve.visible" class="h-3.5 w-3.5" />
             <EyeOff v-else class="h-3.5 w-3.5" />
           </button>
-          <button class="icon-button h-7 w-7" @click="chart.curves.splice(index, 1)">
+          <button
+            class="icon-button h-7 w-7"
+            :title="t('inspector.removeCurve')"
+            @click="chart.curves.splice(index, 1)"
+          >
             <Trash2 class="h-3.5 w-3.5" />
           </button>
         </div>
         <div class="mt-3 grid grid-cols-2 gap-2">
+          <label class="field-label col-span-2">
+            {{ t('inspector.aircraft') }}
+            <select v-model="curve.aircraft_id" class="toolbar-select w-full">
+              <option
+                v-if="!server.aircraft.some((aircraft) => aircraft.id === curve.aircraft_id)"
+                :value="curve.aircraft_id"
+                disabled
+              >
+                {{ t('inspector.unavailableAircraft', { id: curve.aircraft_id }) }}
+              </option>
+              <option v-for="aircraft in server.aircraft" :key="aircraft.id" :value="aircraft.id">
+                {{ aircraft.name || aircraft.id }}
+              </option>
+            </select>
+          </label>
           <label class="field-label"
-            >Pattern
+            >{{ t('inspector.pattern') }}
             <select v-model="curve.line_pattern" class="toolbar-select w-full">
-              <option value="solid">Solid</option>
-              <option value="dashed">Dashed</option>
-              <option value="dotted">Dotted</option>
+              <option value="solid">{{ t('inspector.solid') }}</option>
+              <option value="dashed">{{ t('inspector.dashed') }}</option>
+              <option value="dotted">{{ t('inspector.dotted') }}</option>
             </select>
           </label>
           <label class="field-label"
-            >Y axis
+            >{{ t('inspector.yAxis') }}
             <select v-model="curve.y_axis" class="toolbar-select w-full">
-              <option value="left">Left</option>
-              <option value="right">Right</option>
+              <option value="left">{{ t('inspector.left') }}</option>
+              <option value="right">{{ t('inspector.right') }}</option>
             </select>
           </label>
           <label class="field-label"
-            >Width
+            >{{ t('inspector.width') }}
             <input
               v-model.number="curve.line_width"
               type="number"
@@ -119,7 +148,7 @@ const sample = computed(() => {
             />
           </label>
           <label class="field-label"
-            >Opacity
+            >{{ t('inspector.opacity') }}
             <input
               v-model.number="curve.opacity"
               type="number"
@@ -130,7 +159,7 @@ const sample = computed(() => {
             />
           </label>
           <label class="field-label"
-            >Scale
+            >{{ t('inspector.scale') }}
             <input
               v-model.number="curve.scale"
               type="number"
@@ -139,7 +168,7 @@ const sample = computed(() => {
             />
           </label>
           <label class="field-label"
-            >Offset
+            >{{ t('inspector.offset') }}
             <input
               v-model.number="curve.offset"
               type="number"
@@ -148,19 +177,19 @@ const sample = computed(() => {
             />
           </label>
           <label class="field-label"
-            >Unit
+            >{{ t('inspector.unit') }}
             <input v-model="curve.unit" class="toolbar-input w-full" />
           </label>
           <label class="field-label"
-            >Format
+            >{{ t('inspector.format') }}
             <select v-model="curve.value_format" class="toolbar-select w-full">
-              <option value="auto">Auto</option>
-              <option value="fixed">Fixed</option>
-              <option value="scientific">Scientific</option>
+              <option value="auto">{{ t('inspector.auto') }}</option>
+              <option value="fixed">{{ t('inspector.fixed') }}</option>
+              <option value="scientific">{{ t('inspector.scientific') }}</option>
             </select>
           </label>
           <label class="field-label"
-            >Precision
+            >{{ t('inspector.precision') }}
             <input
               v-model.number="curve.precision"
               type="number"
@@ -170,10 +199,12 @@ const sample = computed(() => {
             />
           </label>
           <label class="mt-5 flex items-center gap-2 text-xs"
-            ><input v-model="curve.smooth" type="checkbox" />Smooth</label
+            ><input v-model="curve.smooth" type="checkbox" />{{ t('inspector.smooth') }}</label
           >
           <label class="flex items-center gap-2 text-xs"
-            ><input v-model="curve.show_symbol" type="checkbox" />Symbols</label
+            ><input v-model="curve.show_symbol" type="checkbox" />{{
+              t('inspector.symbols')
+            }}</label
           >
         </div>
       </article>

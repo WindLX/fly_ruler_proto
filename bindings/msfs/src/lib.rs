@@ -3,8 +3,16 @@
 use std::f64::consts::TAU;
 
 use fly_ruler_proto_core::pb;
-use fly_ruler_proto_core::{Event, TimeSeriesStore};
+use fly_ruler_proto_core::{Event, PlaybackMode, TimeSeriesStore};
 use thiserror::Error;
+
+/// Reserved FlyRuler custom events understood by the MSFS bridge.
+pub mod events {
+    /// Retract the landing gear through the MSFS gear handle.
+    pub const GEAR_UP: &str = "flyruler.control.gear_up";
+    /// Extend the landing gear through the MSFS gear handle.
+    pub const GEAR_DOWN: &str = "flyruler.control.gear_down";
+}
 
 /// Reserved FlyRuler custom field identifiers understood by the MSFS bridge.
 pub mod fields {
@@ -143,6 +151,15 @@ pub enum Surface {
     Spoilers,
 }
 
+/// Landing-gear handle commands supported by the MSFS bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GearCommand {
+    /// Retract the landing gear.
+    Up,
+    /// Extend the landing gear.
+    Down,
+}
+
 /// Minimal simulator operations needed by the bridge state machine.
 pub trait Simulator {
     /// Error produced by the simulator implementation.
@@ -158,6 +175,8 @@ pub trait Simulator {
     fn set_airdata(&mut self, airdata: MsfsAirData) -> Result<(), Self::Error>;
     /// Write one indexed engine throttle lever position.
     fn set_engine_throttle(&mut self, index: u32, ratio: f64) -> Result<(), Self::Error>;
+    /// Move the landing-gear handle to a deterministic position.
+    fn set_landing_gear(&mut self, command: GearCommand) -> Result<(), Self::Error>;
 }
 
 /// Return whether an aircraft's latest lifecycle event leaves it spawned.
@@ -206,6 +225,124 @@ fn first_spawn_timestamp(store: &TimeSeriesStore, id: &String) -> Option<f64> {
         .find_map(|entry| matches!(entry.event, Event::Spawn(_)).then_some(entry.timestamp_secs))
 }
 
+/// Tracks landing-gear events across live and replay cursor changes.
+#[derive(Debug, Default)]
+pub struct GearEventTracker {
+    aircraft_id: Option<String>,
+    cursor_secs: Option<f64>,
+    revision: Option<u64>,
+    mode: Option<PlaybackMode>,
+    last_command: Option<GearCommand>,
+}
+
+impl GearEventTracker {
+    /// Reset all event history when an aircraft is released or SimConnect reconnects.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Resolve the gear commands that must be sent for the current playback snapshot.
+    ///
+    /// Discontinuous cursor changes synchronize the last command at or before
+    /// the cursor. Monotonic playback emits every crossed command in order.
+    pub fn commands_to_apply(
+        &mut self,
+        store: &TimeSeriesStore,
+        aircraft_id: &str,
+        mode: PlaybackMode,
+        cursor_secs: f64,
+        revision: u64,
+    ) -> Vec<GearCommand> {
+        if !cursor_secs.is_finite() {
+            return Vec::new();
+        }
+
+        let discontinuity = self.aircraft_id.as_deref() != Some(aircraft_id)
+            || self.cursor_secs.is_none()
+            || self.revision != Some(revision)
+            || self.mode != Some(mode)
+            || self
+                .cursor_secs
+                .is_some_and(|previous| cursor_secs < previous);
+
+        let mut commands = if discontinuity {
+            latest_gear_command(store, aircraft_id, cursor_secs)
+                .into_iter()
+                .collect()
+        } else {
+            let previous = self.cursor_secs.unwrap_or(cursor_secs);
+            gear_commands_between(store, aircraft_id, previous, cursor_secs)
+        };
+
+        if !discontinuity {
+            commands.retain(|command| {
+                if self.last_command == Some(*command) {
+                    false
+                } else {
+                    self.last_command = Some(*command);
+                    true
+                }
+            });
+        } else if let Some(command) = commands.last().copied() {
+            self.last_command = Some(command);
+        } else {
+            self.last_command = None;
+        }
+
+        // Live data can append an event whose timestamp does not advance the
+        // global cursor. Re-resolve the effective state so it is not missed.
+        if mode == PlaybackMode::Live && !discontinuity {
+            if let Some(command) = latest_gear_command(store, aircraft_id, cursor_secs) {
+                if self.last_command != Some(command) {
+                    commands.push(command);
+                    self.last_command = Some(command);
+                }
+            }
+        }
+
+        self.aircraft_id = Some(aircraft_id.to_owned());
+        self.cursor_secs = Some(cursor_secs);
+        self.revision = Some(revision);
+        self.mode = Some(mode);
+        commands
+    }
+}
+
+fn latest_gear_command(
+    store: &TimeSeriesStore,
+    aircraft_id: &str,
+    cursor_secs: f64,
+) -> Option<GearCommand> {
+    store
+        .get_events_range(&aircraft_id.to_owned(), f64::NEG_INFINITY, cursor_secs)?
+        .into_iter()
+        .rev()
+        .find_map(|entry| gear_command_from_event(&entry.event))
+}
+
+fn gear_commands_between(
+    store: &TimeSeriesStore,
+    aircraft_id: &str,
+    start_exclusive: f64,
+    end_inclusive: f64,
+) -> Vec<GearCommand> {
+    store
+        .get_events_range(&aircraft_id.to_owned(), start_exclusive, end_inclusive)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.timestamp_secs > start_exclusive)
+        .filter_map(|entry| gear_command_from_event(&entry.event))
+        .collect()
+}
+
+fn gear_command_from_event(event: &Event) -> Option<GearCommand> {
+    match event {
+        Event::Custom(name) if name == events::GEAR_UP => Some(GearCommand::Up),
+        Event::Custom(name) if name == events::GEAR_DOWN => Some(GearCommand::Down),
+        _ => None,
+    }
+}
+
 /// Owns freeze lifecycle and applies validated frames to a simulator.
 pub struct BridgeSession<S> {
     simulator: S,
@@ -250,6 +387,11 @@ impl<S: Simulator> BridgeSession<S> {
             self.frozen = false;
         }
         Ok(())
+    }
+
+    /// Apply one landing-gear command without changing the motion freeze state.
+    pub fn apply_gear_command(&mut self, command: GearCommand) -> Result<(), S::Error> {
+        self.simulator.set_landing_gear(command)
     }
 
     /// Return whether the session currently holds the simulator frozen.
@@ -704,6 +846,11 @@ mod tests {
             self.calls.push(format!("engine:{index}"));
             Ok(())
         }
+
+        fn set_landing_gear(&mut self, command: GearCommand) -> Result<(), Self::Error> {
+            self.calls.push(format!("gear:{command:?}"));
+            Ok(())
+        }
     }
 
     #[test]
@@ -781,6 +928,111 @@ mod tests {
             Some("second")
         );
         assert_eq!(select_aircraft_at(&store, Some("first"), 5.0), None);
+    }
+
+    #[test]
+    fn gear_tracker_maps_only_reserved_custom_events() {
+        let store = TimeSeriesStore::new();
+        spawn(&store, "a", 1.0);
+        store.append_event(
+            "a".to_owned(),
+            2.0,
+            Event::Custom(events::GEAR_UP.to_owned()),
+        );
+        store.append_event("a".to_owned(), 3.0, Event::Custom("gear_up".to_owned()));
+        store.append_event(
+            "a".to_owned(),
+            4.0,
+            Event::Custom(events::GEAR_DOWN.to_owned()),
+        );
+
+        let mut tracker = GearEventTracker::default();
+        assert_eq!(
+            tracker.commands_to_apply(&store, "a", PlaybackMode::ReplayPaused, 2.5, 1),
+            [GearCommand::Up]
+        );
+        assert_eq!(
+            tracker.commands_to_apply(&store, "a", PlaybackMode::ReplayPlaying, 4.0, 2),
+            [GearCommand::Down]
+        );
+    }
+
+    #[test]
+    fn gear_tracker_emits_crossed_commands_and_deduplicates_live_state() {
+        let store = TimeSeriesStore::new();
+        spawn(&store, "a", 1.0);
+        let mut tracker = GearEventTracker::default();
+        assert!(tracker
+            .commands_to_apply(&store, "a", PlaybackMode::ReplayPlaying, 1.0, 1)
+            .is_empty());
+
+        store.append_event(
+            "a".to_owned(),
+            2.0,
+            Event::Custom(events::GEAR_UP.to_owned()),
+        );
+        store.append_event(
+            "a".to_owned(),
+            3.0,
+            Event::Custom(events::GEAR_DOWN.to_owned()),
+        );
+        assert_eq!(
+            tracker.commands_to_apply(&store, "a", PlaybackMode::ReplayPlaying, 3.5, 1),
+            [GearCommand::Up, GearCommand::Down]
+        );
+
+        let mut live = GearEventTracker::default();
+        assert_eq!(
+            live.commands_to_apply(&store, "a", PlaybackMode::Live, 4.0, 1),
+            [GearCommand::Down]
+        );
+        store.append_event(
+            "a".to_owned(),
+            4.0,
+            Event::Custom(events::GEAR_DOWN.to_owned()),
+        );
+        assert!(live
+            .commands_to_apply(&store, "a", PlaybackMode::Live, 4.0, 1)
+            .is_empty());
+        store.append_event(
+            "a".to_owned(),
+            4.0,
+            Event::Custom(events::GEAR_UP.to_owned()),
+        );
+        assert_eq!(
+            live.commands_to_apply(&store, "a", PlaybackMode::Live, 4.0, 1),
+            [GearCommand::Up]
+        );
+    }
+
+    #[test]
+    fn gear_tracker_resynchronizes_on_seek_and_reset() {
+        let store = TimeSeriesStore::new();
+        spawn(&store, "a", 1.0);
+        store.append_event(
+            "a".to_owned(),
+            2.0,
+            Event::Custom(events::GEAR_UP.to_owned()),
+        );
+        store.append_event(
+            "a".to_owned(),
+            4.0,
+            Event::Custom(events::GEAR_DOWN.to_owned()),
+        );
+
+        let mut tracker = GearEventTracker::default();
+        assert_eq!(
+            tracker.commands_to_apply(&store, "a", PlaybackMode::ReplayPaused, 5.0, 1),
+            [GearCommand::Down]
+        );
+        assert_eq!(
+            tracker.commands_to_apply(&store, "a", PlaybackMode::ReplayPaused, 3.0, 2),
+            [GearCommand::Up]
+        );
+        tracker.reset();
+        assert!(tracker
+            .commands_to_apply(&store, "a", PlaybackMode::ReplayPaused, 1.5, 3)
+            .is_empty());
     }
 
     fn spawn(store: &TimeSeriesStore, id: &str, timestamp: f64) {

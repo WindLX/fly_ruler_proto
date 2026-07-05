@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import { api } from '@/api'
 import type { CurveStyle, SeriesCatalogItem, SeriesData } from '@/types'
@@ -8,8 +8,11 @@ import { curveKey } from '@/utils'
 export const useSeriesStore = defineStore('series', () => {
   const catalogs = ref<Record<string, SeriesCatalogItem[]>>({})
   const data = ref<Record<string, SeriesData>>({})
-  const loading = ref(false)
+  const loadingSignatures = ref<Record<string, boolean>>({})
+  const errors = ref<Record<string, string | null>>({})
   const error = ref<string | null>(null)
+  const requestGenerations = new Map<string, number>()
+  const loading = computed(() => Object.values(loadingSignatures.value).some(Boolean))
 
   async function loadCatalog(aircraftId: string) {
     const response = await api.seriesCatalog(aircraftId)
@@ -23,7 +26,11 @@ export const useSeriesStore = defineStore('series', () => {
   ) {
     const unique = [...new Map(curves.map((curve) => [curveKey(curve), curve])).values()]
     if (unique.length === 0) return
-    loading.value = true
+    const signature = curveSignature(unique)
+    const generation = (requestGenerations.get(signature) ?? 0) + 1
+    requestGenerations.set(signature, generation)
+    loadingSignatures.value = { ...loadingSignatures.value, [signature]: true }
+    errors.value = { ...errors.value, [signature]: null }
     error.value = null
     try {
       const response = await api.querySeries(
@@ -31,15 +38,29 @@ export const useSeriesStore = defineStore('series', () => {
         range,
         maxPoints,
       )
+      if (requestGenerations.get(signature) !== generation) return
       data.value = {
         ...data.value,
         ...Object.fromEntries(response.series.map((series) => [series.key, series])),
       }
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : String(cause)
+      if (requestGenerations.get(signature) !== generation) return
+      const message = cause instanceof Error ? cause.message : String(cause)
+      error.value = message
+      errors.value = { ...errors.value, [signature]: message }
     } finally {
-      loading.value = false
+      if (requestGenerations.get(signature) === generation) {
+        loadingSignatures.value = { ...loadingSignatures.value, [signature]: false }
+      }
     }
+  }
+
+  function isLoading(curves: CurveStyle[]): boolean {
+    return loadingSignatures.value[curveSignature(curves)] ?? false
+  }
+
+  function errorFor(curves: CurveStyle[]): string | null {
+    return errors.value[curveSignature(curves)] ?? null
   }
 
   function appendLive(curve: CurveStyle, timestamp: number, value: number, maxPoints: number) {
@@ -72,5 +93,19 @@ export const useSeriesStore = defineStore('series', () => {
     }
   }
 
-  return { catalogs, data, loading, error, loadCatalog, loadCurves, appendLive }
+  return {
+    catalogs,
+    data,
+    loading,
+    error,
+    loadCatalog,
+    loadCurves,
+    appendLive,
+    isLoading,
+    errorFor,
+  }
 })
+
+function curveSignature(curves: CurveStyle[]): string {
+  return [...new Set(curves.map(curveKey))].sort().join('|')
+}

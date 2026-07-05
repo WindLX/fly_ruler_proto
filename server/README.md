@@ -20,3 +20,18 @@ The management listener is intentionally restricted to loopback addresses. Addit
 The REST API is rooted at `/api/v1`; the WebSocket endpoint is `/api/v1/ws`. See [`core/README.md`](../core/README.md) for the endpoint and playback contract.
 
 Build the Vue dashboard with `just web-build`, then open `http://127.0.0.1:18003/`. For development, `just dev-console` starts the daemon and Vite together; Vite proxies HTTP and WebSocket API traffic to the daemon。生产构建的 `index.html` 是模板，启动时由 Rust 注入实际 API 地址。
+
+Tag releases contain `fly-ruler-server-linux-x86_64.tar.gz` with this layout:
+
+```text
+fly-ruler-server/
+├── fly-ruler-server
+├── README.md
+├── RELEASING.md
+├── LICENSE
+└── web/
+    └── dist/
+```
+
+从解压目录运行 daemon 即可直接使用随包发布的 Web 控制台。完整发布流程见
+[`../RELEASING.md`](../RELEASING.md)。

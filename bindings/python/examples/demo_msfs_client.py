@@ -91,7 +91,7 @@ def build_state(elapsed_s: float, config: DemoConfig):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--address", default="127.0.0.1:8080")
+    parser.add_argument("--address", default="127.0.0.1:18002")
     parser.add_argument("--name", default="FlyRulerMSFSDemo")
     parser.add_argument("--latitude", type=float, default=31.1434)
     parser.add_argument("--longitude", type=float, default=121.8052)
@@ -101,6 +101,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hz", type=float, default=60.0)
     parser.add_argument("--engine-count", type=int, choices=range(1, 5), default=2)
     parser.add_argument("--duration", type=float, default=0.0)
+    parser.add_argument(
+        "--gear-cycle-secs",
+        type=float,
+        default=0.0,
+        help="Alternate gear up/down events at this interval; <=0 disables",
+    )
     return parser.parse_args()
 
 
@@ -139,11 +145,23 @@ def main() -> int:
         print(f"aircraft_uuid={client.aircraft_uuid}")
         start = time.monotonic()
         next_tick = start
+        next_gear_event = args.gear_cycle_secs
+        gear_down = True
         while running:
             elapsed = time.monotonic() - start
             if args.duration > 0 and elapsed >= args.duration:
                 break
             client.update_state(build_state(elapsed, config), timestamp=time.time())
+            if args.gear_cycle_secs > 0 and elapsed >= next_gear_event:
+                gear_down = not gear_down
+                event_name = (
+                    "flyruler.control.gear_down"
+                    if gear_down
+                    else "flyruler.control.gear_up"
+                )
+                client.create_event(event_name, timestamp=time.time())
+                print(f"sent {event_name}")
+                next_gear_event += args.gear_cycle_secs
             next_tick += period
             delay = next_tick - time.monotonic()
             if delay > 0:

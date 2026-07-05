@@ -101,7 +101,7 @@ export const useServerStore = defineStore('server', () => {
       reconnectTimer = window.setTimeout(connect, 1500)
     }
     socket.onerror = () => {
-      error.value = 'WebSocket connection failed'
+      error.value = 'connection.websocketFailed'
     }
   }
 

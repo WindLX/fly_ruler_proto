@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { BarChart3, Trash2 } from 'lucide-vue-next'
 import { computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -21,6 +22,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import type { ChartModel, CurveStyle } from '@/types'
 import {
   curveKey,
+  effectiveTimeRange,
   formatAbsoluteTime,
   formatNumber,
   formatRelativeTime,
@@ -43,9 +45,39 @@ const props = defineProps<{ chart: ChartModel }>()
 const seriesStore = useSeriesStore()
 const server = useServerStore()
 const workspace = useWorkspaceStore()
+const { t } = useI18n()
 const visibleCurves = computed(() => props.chart.curves.filter((curve) => curve.visible))
+const aircraftIds = computed(() => new Set(server.aircraft.map((aircraft) => aircraft.id)))
+const queryableCurves = computed(() =>
+  props.chart.curves.filter((curve) => aircraftIds.value.has(curve.aircraft_id)),
+)
+const renderedCurves = computed(() =>
+  visibleCurves.value.filter((curve) => aircraftIds.value.has(curve.aircraft_id)),
+)
 const bounds = computed<[number, number]>(() => server.playback?.bounds ?? [0, 1])
+const queryRange = computed(() =>
+  effectiveTimeRange(
+    workspace.workspace.query_start,
+    workspace.workspace.query_end,
+    server.playback?.bounds ?? null,
+  ),
+)
+const displayRange = computed<[number, number]>(() => {
+  const range = queryRange.value
+  return range ? [range.start, range.end] : bounds.value
+})
 const timeOrigin = computed(() => bounds.value[0])
+const pointCount = computed(() =>
+  renderedCurves.value.reduce(
+    (total, curve) => total + (seriesStore.data[curveKey(curve)]?.returned_points ?? 0),
+    0,
+  ),
+)
+const unavailableCount = computed(
+  () => props.chart.curves.filter((curve) => !aircraftIds.value.has(curve.aircraft_id)).length,
+)
+const loading = computed(() => seriesStore.isLoading(queryableCurves.value))
+const loadError = computed(() => seriesStore.errorFor(queryableCurves.value))
 const palette = computed(() =>
   workspace.workspace.theme === 'dark'
     ? {
@@ -79,13 +111,15 @@ const option = computed<EChartsOption>(() => {
   const cursor = server.playback?.cursor_secs
   const view = props.chart.view
   const zoomStartValue =
-    view.zoom_start_value === undefined
+    typeof view.zoom_start_value !== 'number'
       ? undefined
       : toRelativeTime(view.zoom_start_value, timeOrigin.value)
   const zoomEndValue =
-    view.zoom_end_value === undefined
+    typeof view.zoom_end_value !== 'number'
       ? undefined
       : toRelativeTime(view.zoom_end_value, timeOrigin.value)
+  const xMin = toRelativeTime(displayRange.value[0], timeOrigin.value)
+  const xMax = Math.max(toRelativeTime(displayRange.value[1], timeOrigin.value), xMin + 0.001)
   return {
     animation: false,
     backgroundColor: 'transparent',
@@ -113,7 +147,7 @@ const option = computed<EChartsOption>(() => {
           seriesName: string
           value: [number, number]
         }>) {
-          const curve = visibleCurves.value[item.seriesIndex]
+          const curve = renderedCurves.value[item.seriesIndex]
           if (!curve) continue
           lines.push(
             `${item.marker}${item.seriesName}: ${formatNumber(item.value[1], curve.value_format, curve.precision)} ${curve.unit ?? ''}`,
@@ -126,8 +160,8 @@ const option = computed<EChartsOption>(() => {
       type: 'value',
       scale: true,
       name: 'Δt',
-      min: 0,
-      max: Math.max(bounds.value[1] - bounds.value[0], 0.001),
+      min: xMin,
+      max: xMax,
       axisLine: { lineStyle: { color: palette.value.border } },
       axisLabel: {
         color: palette.value.muted,
@@ -155,16 +189,16 @@ const option = computed<EChartsOption>(() => {
       {
         type: 'inside',
         filterMode: 'none',
-        start: view.zoom_start,
-        end: view.zoom_end,
+        start: typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
+        end: typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
         startValue: zoomStartValue,
         endValue: zoomEndValue,
       },
       {
         type: 'slider',
         filterMode: 'none',
-        start: view.zoom_start,
-        end: view.zoom_end,
+        start: typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
+        end: typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
         startValue: zoomStartValue,
         endValue: zoomEndValue,
         height: 18,
@@ -174,7 +208,7 @@ const option = computed<EChartsOption>(() => {
         fillerColor: palette.value.accentSoft,
       },
     ],
-    series: visibleCurves.value.map((curve, index) => ({
+    series: renderedCurves.value.map((curve, index) => ({
       name: curve.alias,
       type: 'line',
       data: transformed(curve),
@@ -205,10 +239,8 @@ const option = computed<EChartsOption>(() => {
 
 async function load() {
   await seriesStore.loadCurves(
-    props.chart.curves,
-    workspace.workspace.query_start !== null && workspace.workspace.query_end !== null
-      ? { start: workspace.workspace.query_start, end: workspace.workspace.query_end }
-      : null,
+    queryableCurves.value,
+    queryRange.value,
     workspace.workspace.max_points,
   )
 }
@@ -249,6 +281,7 @@ watch(
     workspace.workspace.query_end,
     workspace.workspace.max_points,
     server.storeRevision,
+    server.aircraft.map((aircraft) => aircraft.id).join('|'),
   ],
   () => void load(),
 )
@@ -265,22 +298,42 @@ watch(
     >
       <BarChart3 class="h-4 w-4 text-(--accent)" />
       <span class="min-w-0 flex-1 truncate text-xs font-semibold">{{ chart.title }}</span>
-      <span class="text-[10px] text-(--text-muted)">{{ chart.curves.length }} curves</span>
+      <span class="status-chip">{{ t('chart.curveCount', { count: chart.curves.length }) }}</span>
+      <span class="status-chip">{{ t('chart.pointCount', { count: pointCount }) }}</span>
       <button
         class="icon-button h-7 w-7"
-        title="Remove chart"
+        :title="t('chart.remove')"
         @click.stop="workspace.removeChart(chart.id)"
       >
         <Trash2 class="h-3.5 w-3.5" />
       </button>
     </header>
-    <VChart
-      class="min-h-0 flex-1"
-      :option="option"
-      :update-options="{ notMerge: false, lazyUpdate: true }"
-      autoresize
-      @click="seekFromChart"
-      @datazoom="updateZoom"
-    />
+    <div class="relative min-h-0 flex-1">
+      <VChart
+        class="absolute inset-0"
+        :option="option"
+        :update-options="{ notMerge: false, lazyUpdate: true }"
+        autoresize
+        @click="seekFromChart"
+        @datazoom="updateZoom"
+      />
+      <div v-if="loading" class="chart-overlay">
+        <span class="loading-spinner" />
+        <span>{{ t('chart.loading') }}</span>
+      </div>
+      <div v-else-if="loadError" class="chart-overlay chart-overlay-error">
+        <strong>{{ t('chart.loadFailed') }}</strong>
+        <span>{{ loadError }}</span>
+      </div>
+      <div v-else-if="queryableCurves.length === 0" class="chart-overlay">
+        <span>{{ t('chart.aircraftUnavailable') }}</span>
+      </div>
+      <div v-else-if="pointCount === 0" class="chart-overlay">
+        <span>{{ t('chart.noPoints') }}</span>
+        <span v-if="unavailableCount" class="text-[10px]">
+          {{ t('chart.unavailableCurves', { count: unavailableCount }) }}
+        </span>
+      </div>
+    </div>
   </article>
 </template>

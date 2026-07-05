@@ -15,7 +15,7 @@ import { extractValue } from '@/utils'
 const server = useServerStore()
 const workspace = useWorkspaceStore()
 const series = useSeriesStore()
-const { locale } = useI18n()
+const { locale, t, te } = useI18n()
 
 const allCurves = computed(() => [
   ...workspace.workspace.charts.flatMap((chart) => chart.curves),
@@ -24,9 +24,10 @@ const allCurves = computed(() => [
 
 onMounted(async () => {
   await Promise.all([server.refresh(), workspace.load()])
-  if (!workspace.workspace.selected_aircraft_id && server.aircraft[0]) {
-    workspace.selectAircraft(server.aircraft[0].id)
-  }
+  workspace.reconcileDataContext(
+    server.aircraft.map((aircraft) => aircraft.id),
+    server.playback?.bounds ?? null,
+  )
   locale.value = workspace.workspace.locale
   document.documentElement.dataset.theme = workspace.workspace.theme
   server.connect()
@@ -38,6 +39,23 @@ watch(
   () => workspace.workspace.theme,
   (theme) => {
     document.documentElement.dataset.theme = theme
+  },
+)
+
+watch(
+  [
+    () => server.aircraft.map((aircraft) => aircraft.id).join('|'),
+    () => server.playback?.bounds?.[0] ?? null,
+    () => server.playback?.bounds?.[1] ?? null,
+    () => server.storeRevision,
+  ],
+  ([aircraftIds, start, end]) => {
+    const ids = typeof aircraftIds === 'string' ? aircraftIds.split('|').filter(Boolean) : []
+    const bounds =
+      typeof start === 'number' && typeof end === 'number'
+        ? ([start, end] as [number, number])
+        : null
+    if (workspace.hydrated) workspace.reconcileDataContext(ids, bounds)
   },
 )
 
@@ -79,7 +97,7 @@ watch(
       v-if="server.error"
       class="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-400"
     >
-      {{ server.error }}
+      {{ te(server.error) ? t(server.error) : server.error }}
     </div>
     <div class="flex min-h-0 flex-1 gap-2 p-2">
       <DataSidebar v-if="workspace.workspace.left_panel_open" />

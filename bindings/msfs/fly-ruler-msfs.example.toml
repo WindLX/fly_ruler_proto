@@ -6,7 +6,7 @@ stale_timeout_ms = 500
 
 [management]
 enabled = true
-listen = "0.0.0.0:18003"
+listen = "127.0.0.1:18003"
 # Paths are resolved relative to the directory from which the bridge is launched.
 data_root = "sessions"
 web_root = "web/dist"

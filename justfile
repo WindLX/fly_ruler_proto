@@ -29,6 +29,12 @@ test-py: develop
 build-msfs:
     cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc
 
+# Build and stage the release MSFS bundle, including the production Web console
+package-msfs: web-build
+    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --release
+    scripts/package_msfs_bundle.sh release dist/fly-ruler-msfs
+    cd dist && rm -f fly-ruler-msfs-windows-x86_64.zip && zip -r fly-ruler-msfs-windows-x86_64.zip fly-ruler-msfs
+
 # Run the MSFS bridge inside the Steam MSFS 2024 Proton prefix
 run-msfs *ARGS:
     protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe {{ARGS}}

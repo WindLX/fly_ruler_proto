@@ -77,11 +77,12 @@ Design rules:
 - Store remains explicit and deterministic: no hidden autosave or interpolation.
 - UDP ingestion continues during replay; save/load/clear use short maintenance gates.
 - Management file access is restricted to validated names below a configured data root.
-- Production Web assets are loaded from `web/dist`; Rust renders `index.html`
-  with same-origin or explicitly configured public API/WS endpoints.
-- Stored timestamps remain seconds. The Web console converts them to a
-  global-origin relative axis while retaining absolute time for queries and seek.
+- Production Web assets are loaded from `web/dist`; Rust renders `index.html` with same-origin or explicitly configured public API/WS endpoints.
+- Release CI builds `web/dist` once and injects that identical artifact into both the Linux daemon tarball and the MSFS bridge zip. The MSFS archive is verified to contain the executable, SimConnect runtime, Web entrypoint, hashed JS/CSS assets, documentation, license, and checksum manifest.
+- Stored timestamps remain seconds. The Web console converts them to a global-origin relative axis while retaining absolute time for queries and seek.
 - TOML configs, custom fields, and custom events are persisted as data, without schema validation.
+
+The concrete tag workflow and distribution layouts are documented in [`RELEASING.md`](RELEASING.md).
 
 ## 4. Configuration Model
 

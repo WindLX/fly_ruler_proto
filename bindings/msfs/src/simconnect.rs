@@ -6,7 +6,7 @@ use std::ptr;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fly_ruler_proto_msfs::{MsfsAirData, MsfsPose, Simulator, Surface};
+use fly_ruler_proto_msfs::{GearCommand, MsfsAirData, MsfsPose, Simulator, Surface};
 use thiserror::Error;
 
 type Handle = *mut c_void;
@@ -36,6 +36,8 @@ const REQUEST_ENGINE_COUNT: u32 = 2;
 const EVENT_FREEZE_LAT_LON: u32 = 100;
 const EVENT_FREEZE_ALTITUDE: u32 = 101;
 const EVENT_FREEZE_ATTITUDE: u32 = 102;
+const EVENT_GEAR_UP: u32 = 103;
+const EVENT_GEAR_DOWN: u32 = 104;
 
 #[link(name = "SimConnect")]
 unsafe extern "C" {
@@ -229,6 +231,8 @@ impl SimConnectClient {
             (EVENT_FREEZE_LAT_LON, "FREEZE_LATITUDE_LONGITUDE_SET"),
             (EVENT_FREEZE_ALTITUDE, "FREEZE_ALTITUDE_SET"),
             (EVENT_FREEZE_ATTITUDE, "FREEZE_ATTITUDE_SET"),
+            (EVENT_GEAR_UP, "GEAR_UP"),
+            (EVENT_GEAR_DOWN, "GEAR_DOWN"),
         ] {
             let event_name = CString::new(name).expect("static CString");
             // SAFETY: handle and string pointer are valid.
@@ -417,13 +421,17 @@ impl SimConnectClient {
     }
 
     fn transmit_freeze(&self, event_id: u32, value: bool) -> Result<(), SimConnectError> {
+        self.transmit_event(event_id, u32::from(value))
+    }
+
+    fn transmit_event(&self, event_id: u32, data: u32) -> Result<(), SimConnectError> {
         // SAFETY: handle is valid and event ID was mapped during configuration.
         check("SimConnect_TransmitClientEvent", unsafe {
             SimConnect_TransmitClientEvent(
                 self.handle,
                 OBJECT_USER,
                 event_id,
-                u32::from(value),
+                data,
                 GROUP_PRIORITY_HIGHEST,
                 EVENT_FLAG_GROUP_IS_PRIORITY,
             )
@@ -525,6 +533,14 @@ impl Simulator for SimConnectClient {
                 (&ratio as *const f64).cast(),
             )
         })
+    }
+
+    fn set_landing_gear(&mut self, command: GearCommand) -> Result<(), Self::Error> {
+        let event_id = match command {
+            GearCommand::Up => EVENT_GEAR_UP,
+            GearCommand::Down => EVENT_GEAR_DOWN,
+        };
+        self.transmit_event(event_id, 0)
     }
 }
 

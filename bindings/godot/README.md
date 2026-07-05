@@ -2,6 +2,8 @@
 
 本目录提供 `fly_ruler_proto_core` 的 **Godot 4.2+** 绑定，基于 [gdext](https://github.com/godot-rust/gdext)（Rust GDExtension）实现。它面向飞行模拟的接收/可视化端，将 Rust 内核封装为 Godot 可直接调用的 `FlyRulerServer` 类。
 
+仓库 tag 发布流程以及 Linux server、Python wheels、MSFS + Web 发布包的目录契约见 [`../../RELEASING.md`](../../RELEASING.md)。
+
 ## 1. 定位与架构
 
 ```text
