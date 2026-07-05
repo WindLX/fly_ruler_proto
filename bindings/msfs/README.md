@@ -20,6 +20,19 @@ The SDK and installer directories are ignored by Git. `build.rs` verifies the of
 
 ## Build on Linux
 
+Depend on llvm, for debian:
+```bash
+sudo apt-get update
+sudo apt-get install -y llvm-18 zip unzip
+sudo ln -sf /usr/bin/llvm-lib-18 /usr/local/bin/llvm-lib
+command -v llvm-lib
+```
+
+for archlinux:
+```bash
+sudo pacman -S llvm llvm-libs
+```
+
 ```bash
 cargo install cargo-xwin
 rustup target add x86_64-pc-windows-msvc

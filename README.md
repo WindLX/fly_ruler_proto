@@ -29,14 +29,13 @@ cd bindings/python
 uv run python examples/demo_client.py
 ```
 
-MSFS 示例还可发送起落架事件：
+从 Release 下载 MSFS 连接器：
 
 ```bash
-cd bindings/python
-uv run python examples/demo_msfs_client.py --gear-cycle-secs 8
+wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.0/fly-ruler-msfs-windows-x86_64.zip
 ```
 
-标准事件名为 `flyruler.control.gear_up` 和 `flyruler.control.gear_down`。MSFS bridge 会在实时模式、回放跨越事件和 seek/load 后同步对应的起落架手柄状态。
+解压后运行，详情见 [`bindings/msfs/README.md`](bindings/msfs/README.md)
 
 ## 组成
 
