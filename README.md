@@ -56,7 +56,7 @@ uv run python examples/demo_client.py
 从 Release 页面下载最新 MSFS 2024 桥接包（包含 `fly-ruler-msfs-bridge.exe`、`SimConnect.dll`、示例 TOML 和内置 Web 控制台）：
 
 ```bash
-wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.1/fly-ruler-msfs-windows-x86_64.zip
+wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.2/fly-ruler-msfs-windows-x86_64.zip
 unzip fly-ruler-msfs-windows-x86_64.zip -d fly-ruler-msfs
 ```
 

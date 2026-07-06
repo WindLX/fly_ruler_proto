@@ -9,6 +9,8 @@ import {
   PanelRightOpen,
   Radio,
   RefreshCw,
+  Sun,
+  Moon,
 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
@@ -134,7 +136,8 @@ function playbackModeLabel(mode: string | undefined): string {
         {{ locale === 'zh-CN' ? 'EN' : '中' }}
       </button>
       <button class="editor-button compact-text-button" @click="toggleTheme">
-        {{ workspace.workspace.theme === 'dark' ? '☀' : '☾' }}
+        <Sun v-if="workspace.workspace.theme === 'dark'" class="h-4 w-4" />
+        <Moon v-else class="h-4 w-4" />
       </button>
     </div>
   </header>

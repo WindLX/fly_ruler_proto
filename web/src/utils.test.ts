@@ -14,6 +14,7 @@ import {
   toAbsoluteTime,
   toRelativeTime,
   timelineTickStep,
+  zoomTimeRange,
 } from '@/utils'
 
 describe('series helpers', () => {
@@ -82,5 +83,15 @@ describe('series helpers', () => {
     expect(major.length).toBeGreaterThan(10)
     expect(minor.length).toBeGreaterThan(major.length)
     expect(major.some((tick) => tick.label === '+00:10')).toBe(true)
+
+    const offsetTicks = generateTimelineTicks(10, 800, 84, 10)
+    expect(offsetTicks.some((tick) => tick.label === '+00:12')).toBe(true)
+    expect(offsetTicks.every((tick) => tick.value >= 10 && tick.value <= 20)).toBe(true)
+  })
+
+  it('zooms a time range around the requested anchor and clamps to bounds', () => {
+    expect(zoomTimeRange([0, 100], [0, 100], 25, 0.5)).toEqual([12.5, 62.5])
+    expect(zoomTimeRange([0, 100], [12.5, 62.5], 12.5, 0.5)).toEqual([12.5, 37.5])
+    expect(zoomTimeRange([0, 100], [12.5, 37.5], 20, 100)).toEqual([0, 100])
   })
 })

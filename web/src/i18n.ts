@@ -71,6 +71,7 @@ export const messages = {
     inspector: {
       currentState: '当前状态',
       noSample: '所选飞行器当前没有状态样本',
+      currentFrameEvents: '当前帧事件 · {count}',
       events: '事件',
       noEvents: '没有生命周期事件',
       chart: '图表检查器',
@@ -107,13 +108,17 @@ export const messages = {
       previousEvent: '上一个事件',
       nextEvent: '下一个事件',
       truncated: '事件列表已截断',
-      fullRange: '完整范围',
       duration: '时长',
+      zoomIn: '放大时间轴',
+      zoomOut: '缩小时间轴',
+      resetZoom: '恢复完整时间范围',
     },
     shortcuts: {
       playPause: '播放/暂停',
       frame: '逐帧',
+      tenFrame: '十帧',
       event: '事件',
+      wheelZoom: '滚轮缩放',
     },
     events: {
       spawn: '生成',
@@ -238,6 +243,7 @@ export const messages = {
     inspector: {
       currentState: 'Current state',
       noSample: 'No current sample for the selected aircraft',
+      currentFrameEvents: 'Current-frame events · {count}',
       events: 'Events',
       noEvents: 'No lifecycle events',
       chart: 'Chart inspector',
@@ -274,13 +280,17 @@ export const messages = {
       previousEvent: 'Previous event',
       nextEvent: 'Next event',
       truncated: 'Event list truncated',
-      fullRange: 'Full range',
       duration: 'Duration',
+      zoomIn: 'Zoom timeline in',
+      zoomOut: 'Zoom timeline out',
+      resetZoom: 'Reset timeline zoom',
     },
     shortcuts: {
       playPause: 'Play/Pause',
       frame: 'Frame step',
+      tenFrame: 'Ten frame step',
       event: 'Event step',
+      wheelZoom: 'Wheel to zoom',
     },
     events: {
       spawn: 'Spawn',

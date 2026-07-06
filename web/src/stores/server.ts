@@ -87,7 +87,10 @@ export const useServerStore = defineStore('server', () => {
           void refreshTimeline(message.playback.bounds)
         }
       } else if (message.type === 'operation_status') {
-        operations.value = { ...operations.value, [message.operation.id]: message.operation }
+        operations.value = {
+          ...operations.value,
+          [message.operation.id]: message.operation,
+        }
         if (message.operation.state === 'succeeded' || message.operation.state === 'failed') {
           void refresh()
         }

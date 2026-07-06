@@ -216,19 +216,24 @@ export function generateTimelineTicks(
   span: number,
   width: number,
   minLabelSpacing = 84,
+  offset = 0,
 ): TimelineTick[] {
   if (!Number.isFinite(span) || span <= 0 || !Number.isFinite(width) || width <= 0) return []
+  const safeOffset = Number.isFinite(offset) ? offset : 0
   const major = timelineTickStep(span, width, minLabelSpacing)
   const divisions = minorTickDivisions(major)
   const minor = major / divisions
   const ticks: TimelineTick[] = []
   const epsilon = minor * 1e-6
-  const count = Math.min(2_000, Math.floor(span / minor) + 1)
-  for (let index = 0; index <= count; index++) {
+  const firstIndex = Math.ceil((safeOffset - epsilon) / minor)
+  const lastIndex = Math.floor((safeOffset + span + epsilon) / minor)
+  const count = Math.min(2_000, Math.max(0, lastIndex - firstIndex + 1))
+  for (let offsetIndex = 0; offsetIndex < count; offsetIndex++) {
+    const index = firstIndex + offsetIndex
     const value = index * minor
-    if (value > span + epsilon) break
+    const localValue = value - safeOffset
     const isMajor = index % divisions === 0
-    const pixel = (value / span) * width
+    const pixel = (localValue / span) * width
     const showLabel = isMajor && pixel >= 34 && pixel <= width - 34
     ticks.push({
       value,
@@ -237,6 +242,48 @@ export function generateTimelineTicks(
     })
   }
   return ticks
+}
+
+export function zoomTimeRange(
+  bounds: [number, number],
+  view: [number, number],
+  anchor: number,
+  factor: number,
+  minimumSpan = Math.max((bounds[1] - bounds[0]) / 10_000, 0.001),
+): [number, number] {
+  const fullSpan = bounds[1] - bounds[0]
+  if (
+    !Number.isFinite(fullSpan) ||
+    fullSpan <= 0 ||
+    !Number.isFinite(anchor) ||
+    !Number.isFinite(factor) ||
+    factor <= 0
+  ) {
+    return [...bounds]
+  }
+
+  const start = Math.max(bounds[0], Math.min(view[0], bounds[1]))
+  const end = Math.max(start, Math.min(view[1], bounds[1]))
+  const viewSpan = Math.max(end - start, Math.min(minimumSpan, fullSpan))
+  const targetSpan = Math.min(
+    fullSpan,
+    Math.max(Math.min(minimumSpan, fullSpan), viewSpan * factor),
+  )
+  if (targetSpan >= fullSpan * (1 - 1e-9)) return [...bounds]
+
+  const clampedAnchor = Math.min(end, Math.max(start, anchor))
+  const anchorRatio = Math.min(1, Math.max(0, (clampedAnchor - start) / viewSpan))
+  let nextStart = clampedAnchor - targetSpan * anchorRatio
+  let nextEnd = nextStart + targetSpan
+  if (nextStart < bounds[0]) {
+    nextEnd += bounds[0] - nextStart
+    nextStart = bounds[0]
+  }
+  if (nextEnd > bounds[1]) {
+    nextStart -= nextEnd - bounds[1]
+    nextEnd = bounds[1]
+  }
+  return [Math.max(bounds[0], nextStart), Math.min(bounds[1], nextEnd)]
 }
 
 function minorTickDivisions(step: number): number {

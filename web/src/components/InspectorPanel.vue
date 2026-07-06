@@ -11,6 +11,11 @@ const server = useServerStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const chart = computed(() => workspace.selectedChart)
+const currentFrameEvents = computed(() => {
+  const cursor = server.playback?.cursor_secs
+  if (cursor === null || cursor === undefined) return []
+  return server.timelineEvents.filter((event) => Math.abs(event.timestamp_secs - cursor) <= 1e-6)
+})
 const events = computed(() => {
   const id = workspace.workspace.selected_aircraft_id
   return id ? server.timelineEvents.filter((event) => event.aircraft_id === id) : []
@@ -22,6 +27,11 @@ const sample = computed(() => {
 
 function eventLabel(eventType: string): string {
   return t(`events.${eventType}`)
+}
+
+function aircraftLabel(id: string | undefined): string {
+  if (!id) return '—'
+  return server.aircraft.find((aircraft) => aircraft.id === id)?.name || id
 }
 </script>
 
@@ -41,6 +51,31 @@ function eventLabel(eventType: string): string {
         <pre class="state-json scrollbar-thin">{{ JSON.stringify(sample.state, null, 2) }}</pre>
       </div>
       <p v-else class="empty-copy">{{ t('inspector.noSample') }}</p>
+    </section>
+
+    <section v-if="currentFrameEvents.length" class="editor-section current-frame-events">
+      <h2 class="editor-section-header">
+        {{ t('inspector.currentFrameEvents', { count: currentFrameEvents.length }) }}
+      </h2>
+      <div class="editor-section-body">
+        <div
+          v-for="(event, index) in currentFrameEvents"
+          :key="`${event.aircraft_id}:${event.timestamp_secs}:${event.event_type}:${event.name ?? event.reason ?? ''}:${index}`"
+          class="current-frame-event-row"
+        >
+          <span
+            class="current-frame-event-marker"
+            :class="`current-frame-event-marker-${event.event_type}`"
+          />
+          <strong>{{ eventLabel(event.event_type) }}</strong>
+          <span class="min-w-0 truncate text-(--text-secondary)">
+            {{ event.name ?? event.reason ?? '' }}
+          </span>
+          <span class="current-frame-event-aircraft mono">
+            {{ aircraftLabel(event.aircraft_id) }}
+          </span>
+        </div>
+      </div>
     </section>
 
     <section class="editor-section">
@@ -113,7 +148,11 @@ function eventLabel(eventType: string): string {
                   :value="curve.aircraft_id"
                   disabled
                 >
-                  {{ t('inspector.unavailableAircraft', { id: curve.aircraft_id }) }}
+                  {{
+                    t('inspector.unavailableAircraft', {
+                      id: curve.aircraft_id,
+                    })
+                  }}
                 </option>
                 <option v-for="aircraft in server.aircraft" :key="aircraft.id" :value="aircraft.id">
                   {{ aircraft.name || aircraft.id }}

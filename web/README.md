@@ -24,7 +24,12 @@ select, editable field, or modal dialog:
 The timeline observes its rendered width and chooses labeled major ticks plus
 shorter minor ticks from millisecond through multi-day ranges. Event clustering
 is pixel-based, so marker density remains stable when sidebars are collapsed or
-the window is resized.
+the window is resized. The track reserves space at both edges so boundary
+markers remain fully visible. Use the mouse wheel to zoom around the pointer;
+the timeline toolbar also provides zoom-in, zoom-out, and reset controls.
+
+When the playback cursor lands on one or more events, the inspector shows a
+dedicated current-frame event section with every matching aircraft event.
 
 Workspace data is reconciled whenever the in-memory Store or loaded Session
 changes. Query windows that no longer overlap the active data are reset to the

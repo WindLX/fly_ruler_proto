@@ -425,6 +425,51 @@ input[type='checkbox'] {
   font-size: 10px;
 }
 
+.current-frame-events {
+  box-shadow: inset 2px 0 var(--selection);
+}
+
+.current-frame-event-row {
+  display: grid;
+  min-height: 28px;
+  grid-template-columns: 10px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--selection) 35%, var(--border-color));
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--selection) 8%, var(--card-bg));
+  padding: 4px 6px;
+  font-size: 10px;
+}
+
+.current-frame-event-marker {
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  border: 1px solid color-mix(in srgb, black 35%, transparent);
+}
+
+.current-frame-event-marker-spawn {
+  background: #3ca46b;
+}
+
+.current-frame-event-marker-despawn {
+  background: #c94d55;
+}
+
+.current-frame-event-marker-custom {
+  background: #c8872b;
+}
+
+.current-frame-event-aircraft {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .empty-copy {
   margin: 6px;
   border: 1px dashed var(--border-soft);
@@ -647,10 +692,26 @@ input[type='checkbox'] {
 
 .timeline-shortcuts {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   color: var(--text-muted);
   font-size: 9px;
+}
+
+.timeline-zoom-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.timeline-zoom-level {
+  min-width: 43px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: right;
 }
 
 kbd {
@@ -665,6 +726,8 @@ kbd {
 }
 
 .timeline-track {
+  --timeline-side-padding: 16px;
+
   position: relative;
   height: 62px;
   cursor: ew-resize;
@@ -679,8 +742,8 @@ kbd {
 .timeline-axis {
   position: absolute;
   top: 27px;
-  right: 0;
-  left: 0;
+  right: var(--timeline-side-padding);
+  left: var(--timeline-side-padding);
   height: 1px;
   background: var(--border-strong);
 }

@@ -3,7 +3,7 @@ members = ["core", "server", "bindings/python", "bindings/godot", "bindings/msfs
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["WindLX <1418043337@qq.com>"]
 description = "Protobuf UDP runtime and time-series state kernel for aerospace simulation"

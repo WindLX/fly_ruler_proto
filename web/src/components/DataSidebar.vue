@@ -210,7 +210,9 @@ function addField(field: (typeof catalog.value)[number], index: number) {
             <h3 class="text-sm font-semibold text-(--text-primary)">
               {{ t('sessions.clearConfirmTitle') }}
             </h3>
-            <p class="mt-2 text-xs text-(--text-secondary)">{{ t('sessions.clearConfirm') }}</p>
+            <p class="mt-2 text-xs text-(--text-secondary)">
+              {{ t('sessions.clearConfirm') }}
+            </p>
             <div class="mt-4 flex justify-end gap-1">
               <button class="editor-button" @click="cancelClearMemory">
                 {{ t('common.cancel') }}
