@@ -89,6 +89,10 @@ Useful options:
 --listen 127.0.0.1:18002
 --aircraft-id <32-character FlyRuler UUID>
 --tick-hz 240
+--render-hz 240
+--smoothing-mode low_latency
+--interpolation-delay-ms 30
+--max-extrapolation-ms 40
 --stale-timeout-ms 500
 --http-listen 127.0.0.1:18003
 --data-root ./sessions
@@ -112,7 +116,19 @@ Release archives already contain `web/dist`; when launched from the extraction r
 
 Copy `fly-ruler-msfs.example.toml` to `fly-ruler-msfs.toml`, or pass a custom path through `--config`. If `--config` is omitted, the bridge automatically loads `fly-ruler-msfs.toml` from the current directory when it exists.
 
-Configuration precedence is CLI, then TOML, then built-in defaults. Relative `data_root`, `web_root`, and `logging.file_path` values are resolved relative to the TOML file. `--http` and `--no-http` explicitly override `management.enabled`.
+Configuration precedence is CLI, then TOML, then built-in defaults. Relative `data_root`, `web_root`, and `logging.file_path` values are resolved from the directory where the bridge is launched. `--http` and `--no-http` explicitly override `management.enabled`.
+
+## Live smoothing
+
+Live mode uses a bridge-side sample buffer so MSFS receives a fixed-cadence, coherent state frame instead of jittery latest-sample steps. This reduces visual and HUD jumps when UDP arrival timing, controller timing, Proton scheduling, and SimConnect rendering do not line up exactly.
+
+The smoothing modes are:
+
+- `low_latency` (default): 30 ms interpolation delay and up to 40 ms short extrapolation. This is intended for hand-flown closed-loop control.
+- `smooth`: 80 ms interpolation delay and up to 20 ms short extrapolation. Use this when visual smoothness matters more than response latency.
+- `latest`: old compatibility behavior. The bridge writes only newly received latest samples, which is useful for A/B tests and diagnosing whether a symptom is caused by smoothing or by source data.
+
+`render_hz` controls the SimConnect write cadence and defaults to `tick_hz`. `interpolation_delay_ms` and `max_extrapolation_ms` can override the preset values. When the stream becomes stale, the bridge stops extrapolating and holds the last valid pose; despawn, disconnect, or normal shutdown still releases the MSFS freeze state.
 
 `management.public_api_base_url` and `management.public_websocket_url` are optional. When omitted, the embedded Web console uses same-origin API paths. Set them only when the browser reaches the bridge through a reverse proxy or a different public host.
 
@@ -122,15 +138,17 @@ The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the 
 
 - `derived.lat/lon`: WGS-84 decimal degrees.
 - `derived.altitude`: MSL meters.
-- `derived.tas`: true airspeed in meters/second.
-- `derived.alpha/beta`: aerodynamic angles in radians.
+- `velocity`: body-FRD velocity in meters/second (`x` forward, `y` right,
+  `z` down).
+- `derived.tas` and `derived.alpha/beta`: telemetry only for this bridge; they
+  are not used to reconstruct MSFS body velocity.
 - `attitude`: Hamilton quaternion `(w, x, y, z)`, body-FRD to local-NED.
 - `angular_velocity`: body-FRD radians/second.
 - `control_surfaces`: standard control-surface angles in radians and ratios in
   `0..=1`.
 - `engines`: engine indices `1..=4` with throttle lever ratios in `0..=1`.
 
-The bridge writes `AIRSPEED TRUE RAW`, reconstructed MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed engine throttles. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments. `derived.ias/cas/mach` remain protocol telemetry and are not written directly.
+The bridge writes MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed `GENERAL ENG THROTTLE LEVER POSITION` SimVars. It no longer writes `AIRSPEED TRUE RAW`, and it no longer reconstructs velocity from angle of attack, sideslip, and TAS. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments from the aircraft/model state. `derived.ias/cas/mach` remain protocol telemetry and are not written directly.
 
 ## Landing-gear events
 

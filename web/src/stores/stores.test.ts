@@ -1,9 +1,11 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { useSeriesStore } from '@/stores/series'
+import { mergeSeriesData, useSeriesStore } from '@/stores/series'
+import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { CurveStyle } from '@/types'
+import type { CurveStyle, SeriesData, TimestampedState } from '@/types'
+import { curveKey } from '@/utils'
 
 const curve: CurveStyle = {
   aircraft_id: 'aircraft-1',
@@ -27,6 +29,28 @@ const curve: CurveStyle = {
 describe('dashboard stores', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('treats websocket-only aircraft samples as available before REST refresh', () => {
+    const store = useServerStore()
+    store.aircraft = []
+    store.samples = {
+      'live-aircraft': {
+        timestamp_secs: 10,
+        state: {
+          position: null,
+          velocity: null,
+          attitude: null,
+          angular_velocity: null,
+          derived: null,
+          control_surfaces: null,
+          engines: [],
+          custom_fields: {},
+        },
+      },
+    }
+
+    expect(store.availableAircraftIds).toEqual(['live-aircraft'])
+  })
+
   it('deduplicates and orders live points', () => {
     const store = useSeriesStore()
     store.appendLive(curve, 2, 20, 100)
@@ -36,6 +60,130 @@ describe('dashboard stores', () => {
       [1, 10],
       [2, 21],
     ])
+  })
+
+  it('merges websocket snapshots into configured live curves', () => {
+    const store = useSeriesStore()
+    const sample: TimestampedState = {
+      timestamp_secs: 10,
+      state: {
+        position: { x: 42, y: 0, z: 0 },
+        velocity: null,
+        attitude: null,
+        angular_velocity: null,
+        derived: null,
+        control_surfaces: null,
+        engines: [],
+        custom_fields: {},
+      },
+    }
+
+    store.mergeLiveSamples([curve], { 'aircraft-1': sample }, 100, true)
+    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 42]])
+
+    store.mergeLiveSamples(
+      [curve],
+      {
+        'aircraft-1': {
+          ...sample,
+          timestamp_secs: 10,
+          state: { ...sample.state, position: { x: 43, y: 0, z: 0 } },
+        },
+      },
+      100,
+      true,
+    )
+    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 43]])
+
+    store.mergeLiveSamples(
+      [curve],
+      {
+        'aircraft-1': {
+          ...sample,
+          timestamp_secs: 11,
+          state: { ...sample.state, position: { x: 44, y: 0, z: 0 } },
+        },
+      },
+      100,
+      false,
+    )
+    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 43]])
+  })
+
+  it('keeps newer live points when a historical series response arrives late', () => {
+    const key = curveKey(curve)
+    const existing: SeriesData = {
+      key,
+      aircraft_id: curve.aircraft_id,
+      selector: curve.selector,
+      points: [
+        [2, 20],
+        [4, 40],
+      ],
+      total_points: 2,
+      returned_points: 2,
+      stats: { min: 20, max: 40, last: 40, start: 2, end: 4 },
+    }
+    const incoming: SeriesData = {
+      key,
+      aircraft_id: curve.aircraft_id,
+      selector: curve.selector,
+      points: [
+        [1, 10],
+        [2, 999],
+        [3, 30],
+      ],
+      total_points: 3,
+      returned_points: 3,
+      stats: { min: 10, max: 999, last: 30, start: 1, end: 3 },
+    }
+
+    expect(mergeSeriesData(existing, incoming, 100, 'existing').points).toEqual([
+      [1, 10],
+      [2, 20],
+      [3, 30],
+      [4, 40],
+    ])
+  })
+
+  it('trims merged series to the newest max points', () => {
+    const key = curveKey(curve)
+    const merged = mergeSeriesData(
+      {
+        key,
+        aircraft_id: curve.aircraft_id,
+        selector: curve.selector,
+        points: [
+          [1, 10],
+          [3, 30],
+        ],
+        total_points: 2,
+        returned_points: 2,
+        stats: { min: 10, max: 30, last: 30, start: 1, end: 3 },
+      },
+      {
+        key,
+        aircraft_id: curve.aircraft_id,
+        selector: curve.selector,
+        points: [
+          [2, 20],
+          [4, 40],
+        ],
+        total_points: 2,
+        returned_points: 2,
+        stats: { min: 20, max: 40, last: 40, start: 2, end: 4 },
+      },
+      3,
+      'incoming',
+    )
+
+    expect(merged.points).toEqual([
+      [2, 20],
+      [3, 30],
+      [4, 40],
+    ])
+    expect(merged.returned_points).toBe(3)
+    expect(merged.stats).toMatchObject({ min: 20, max: 40, last: 40, start: 2, end: 4 })
   })
 
   it('commits grid layout into the persisted chart model', () => {

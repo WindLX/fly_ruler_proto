@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Trash2 } from 'lucide-vue-next'
+import { BarChart3, Radio, Trash2 } from 'lucide-vue-next'
 import { computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import VChart from 'vue-echarts'
@@ -47,7 +47,7 @@ const server = useServerStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const visibleCurves = computed(() => props.chart.curves.filter((curve) => curve.visible))
-const aircraftIds = computed(() => new Set(server.aircraft.map((aircraft) => aircraft.id)))
+const aircraftIds = computed(() => new Set(server.availableAircraftIds))
 const queryableCurves = computed(() =>
   props.chart.curves.filter((curve) => aircraftIds.value.has(curve.aircraft_id)),
 )
@@ -77,7 +77,15 @@ const unavailableCount = computed(
   () => props.chart.curves.filter((curve) => !aircraftIds.value.has(curve.aircraft_id)).length,
 )
 const loading = computed(() => seriesStore.isLoading(queryableCurves.value))
+const blockingLoading = computed(() => loading.value && pointCount.value === 0)
 const loadError = computed(() => seriesStore.errorFor(queryableCurves.value))
+const hasManualZoom = computed(
+  () =>
+    typeof props.chart.view.zoom_start === 'number' ||
+    typeof props.chart.view.zoom_end === 'number' ||
+    typeof props.chart.view.zoom_start_value === 'number' ||
+    typeof props.chart.view.zoom_end_value === 'number',
+)
 const palette = computed(() =>
   workspace.workspace.theme === 'dark'
     ? {
@@ -118,6 +126,7 @@ const option = computed<EChartsOption>(() => {
     typeof view.zoom_end_value !== 'number'
       ? undefined
       : toRelativeTime(view.zoom_end_value, timeOrigin.value)
+  const hasAbsoluteZoom = zoomStartValue !== undefined || zoomEndValue !== undefined
   const xMin = toRelativeTime(displayRange.value[0], timeOrigin.value)
   const xMax = Math.max(toRelativeTime(displayRange.value[1], timeOrigin.value), xMin + 0.001)
   return {
@@ -190,16 +199,18 @@ const option = computed<EChartsOption>(() => {
       {
         type: 'inside',
         filterMode: 'none',
-        start: typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
-        end: typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
+        start:
+          !hasAbsoluteZoom && typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
+        end: !hasAbsoluteZoom && typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
         startValue: zoomStartValue,
         endValue: zoomEndValue,
       },
       {
         type: 'slider',
         filterMode: 'none',
-        start: typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
-        end: typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
+        start:
+          !hasAbsoluteZoom && typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
+        end: !hasAbsoluteZoom && typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
         startValue: zoomStartValue,
         endValue: zoomEndValue,
         height: 14,
@@ -274,6 +285,10 @@ function updateZoom(params: unknown) {
   })
 }
 
+function resetZoom() {
+  workspace.updateChartView(props.chart.id, {}, false)
+}
+
 onMounted(() => void load())
 watch(
   () => [
@@ -282,7 +297,7 @@ watch(
     workspace.workspace.query_end,
     workspace.workspace.max_points,
     server.storeRevision,
-    server.aircraft.map((aircraft) => aircraft.id).join('|'),
+    server.availableAircraftIds.join('|'),
   ],
   () => void load(),
 )
@@ -300,6 +315,14 @@ watch(
       <span class="editor-stat">{{ t('chart.curveCount', { count: chart.curves.length }) }}</span>
       <span class="editor-stat">{{ t('chart.pointCount', { count: pointCount }) }}</span>
       <button
+        v-if="server.playback?.mode === 'live' && hasManualZoom"
+        class="editor-button chart-live-button"
+        :title="t('chart.returnLive')"
+        @click.stop="resetZoom"
+      >
+        <Radio class="h-3.5 w-3.5" />{{ t('chart.liveFollow') }}
+      </button>
+      <button
         class="editor-icon-button"
         :title="t('chart.remove')"
         @click.stop="workspace.removeChart(chart.id)"
@@ -316,7 +339,7 @@ watch(
         @click="seekFromChart"
         @datazoom="updateZoom"
       />
-      <div v-if="loading" class="chart-overlay">
+      <div v-if="blockingLoading" class="chart-overlay">
         <span class="loading-spinner" />
         <span>{{ t('chart.loading') }}</span>
       </div>

@@ -66,6 +66,7 @@ message CustomField {
 
 message AircraftState {
   Vector3              position         = 1;
+  // Body-FRD velocity in meters/second: x forward, y right, z down.
   Vector3              velocity         = 2;
   Quaternion           attitude         = 3;
   Vector3              angular_velocity = 4;

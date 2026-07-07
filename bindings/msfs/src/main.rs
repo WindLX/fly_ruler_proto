@@ -17,9 +17,6 @@ fn main() {
 }
 
 #[cfg(windows)]
-mod simconnect;
-
-#[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -27,11 +24,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::time::{Duration, Instant};
 
     use fly_ruler_proto_core::{init_logging, KernelRuntime, PlaybackMode, TimeSeriesStore};
+    use fly_ruler_proto_msfs::simconnect::{SimConnectClient, SimConnectError};
+    use fly_ruler_proto_msfs::smoothing::{
+        FrameSource, LiveFrameBuffer, PushResult, SmoothingMode, SmoothingStats,
+    };
     use fly_ruler_proto_msfs::{
         frame_from_state, optional_field_warnings, select_aircraft_at, BridgeSession,
         GearEventTracker,
     };
-    use simconnect::{SimConnectClient, SimConnectError};
     use tracing::{error, info, warn};
 
     let settings = config::load()?;
@@ -67,8 +67,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let playback = kernel.playback();
 
-    let tick = Duration::from_secs_f64(1.0 / settings.tick_hz);
+    let tick = Duration::from_secs_f64(1.0 / settings.render_hz);
     let stale_timeout = Duration::from_millis(settings.stale_timeout_ms);
+    info!(
+        target: "fly_ruler_proto_msfs.bridge",
+        tick_hz = settings.tick_hz,
+        render_hz = settings.render_hz,
+        smoothing_mode = settings.smoothing.mode.as_str(),
+        interpolation_delay_ms = settings.smoothing.interpolation_delay.as_millis(),
+        max_extrapolation_ms = settings.smoothing.max_extrapolation.as_millis(),
+        "MSFS bridge live smoothing configured"
+    );
 
     while running.load(Ordering::SeqCst) {
         let simulator = match SimConnectClient::connect() {
@@ -88,6 +97,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut stale_reported = false;
         let mut last_optional_warnings = Vec::new();
         let mut gear_events = GearEventTracker::default();
+        let mut smoother = LiveFrameBuffer::new(settings.smoothing.clone());
+        let mut last_playback_mode: Option<PlaybackMode> = None;
+        let mut last_smoothing_stats = SmoothingStats::default();
+        let mut last_smoothing_log = Instant::now();
         let mut reconnect = false;
 
         while running.load(Ordering::SeqCst) {
@@ -107,6 +120,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let playback_state = playback.snapshot();
             let selection_cursor = playback_state.cursor_secs.unwrap_or(f64::NEG_INFINITY);
+            if last_playback_mode != Some(playback_state.mode) {
+                smoother.reset();
+                last_sample_key = None;
+                last_state = None;
+                last_new_sample = None;
+                stale_reported = false;
+                last_optional_warnings.clear();
+                last_playback_mode = Some(playback_state.mode);
+            }
 
             if let Some(id) = selected.as_ref() {
                 let spawned = playback
@@ -124,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     stale_reported = false;
                     last_optional_warnings.clear();
                     gear_events.reset();
+                    smoother.reset();
                 }
             }
 
@@ -132,6 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     select_aircraft_at(&store, settings.aircraft_id.as_deref(), selection_cursor);
                 if let Some(id) = &selected {
                     info!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, "selected FlyRuler aircraft");
+                    smoother.reset();
                 }
             }
 
@@ -169,42 +193,119 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Some(resolved) = playback.resolve_aircraft_with(&playback_state, id) {
                     let sample = resolved.sample;
-                    let sample_key = (sample.timestamp_secs.to_bits(), playback_state.revision);
-                    if last_sample_key != Some(sample_key)
-                        || last_state.as_ref() != Some(&sample.state)
-                    {
-                        let warnings = optional_field_warnings(&sample.state);
-                        if warnings != last_optional_warnings {
-                            for warning in &warnings {
-                                warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, warning, "invalid optional aircraft field");
-                            }
-                            last_optional_warnings = warnings;
-                        }
-                        match frame_from_state(&sample.state) {
-                            Ok(frame) => {
-                                if let Err(error) = session.apply(frame) {
-                                    error!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "failed to write MSFS state");
-                                    reconnect = true;
-                                    break;
+                    if playback_state.mode == PlaybackMode::Live {
+                        let sample_key = (sample.timestamp_secs.to_bits(), playback_state.revision);
+                        let raw_changed = last_sample_key != Some(sample_key)
+                            || last_state.as_ref() != Some(&sample.state);
+                        if raw_changed {
+                            match smoother.push(
+                                sample.timestamp_secs,
+                                sample.state.clone(),
+                                loop_start,
+                            ) {
+                                PushResult::Accepted | PushResult::UpdatedDuplicate => {
+                                    last_new_sample = Some(loop_start);
+                                    stale_reported = false;
                                 }
-                                last_sample_key = Some(sample_key);
-                                last_state = Some(sample.state.clone());
-                                last_new_sample = Some(Instant::now());
-                                stale_reported = false;
+                                PushResult::DroppedInvalidTimestamp => {
+                                    warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, "dropped aircraft state with invalid timestamp");
+                                }
+                                PushResult::DroppedOutOfOrder => {
+                                    warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, timestamp_secs = sample.timestamp_secs, "dropped out-of-order aircraft state");
+                                }
                             }
-                            Err(error) => {
-                                warn!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "ignoring invalid aircraft state");
-                                last_sample_key = Some(sample_key);
-                                last_state = Some(sample.state.clone());
+                            last_sample_key = Some(sample_key);
+                            last_state = Some(sample.state.clone());
+                        }
+
+                        let should_render =
+                            settings.smoothing.mode != SmoothingMode::Latest || raw_changed;
+                        if should_render {
+                            if let Some(smoothed) = smoother.render(loop_start) {
+                                let warnings = optional_field_warnings(&smoothed.state);
+                                if warnings != last_optional_warnings {
+                                    for warning in &warnings {
+                                        warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, warning, "invalid optional aircraft field");
+                                    }
+                                    last_optional_warnings = warnings;
+                                }
+                                match frame_from_state(&smoothed.state) {
+                                    Ok(frame) => {
+                                        if let Err(error) = session.apply(frame) {
+                                            error!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "failed to write MSFS state");
+                                            reconnect = true;
+                                            break;
+                                        }
+                                        if smoothed.source == FrameSource::Held
+                                            && !stale_reported
+                                            && last_new_sample
+                                                .is_some_and(|seen| seen.elapsed() >= stale_timeout)
+                                        {
+                                            warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, "aircraft state is stale; holding final MSFS pose");
+                                            stale_reported = true;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        warn!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "ignoring invalid aircraft state");
+                                    }
+                                }
+                            }
+                        } else if !stale_reported
+                            && last_new_sample.is_some_and(|seen| seen.elapsed() >= stale_timeout)
+                        {
+                            warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, "aircraft state is stale; holding final MSFS pose");
+                            stale_reported = true;
+                        }
+                    } else {
+                        let sample_key = (sample.timestamp_secs.to_bits(), playback_state.revision);
+                        if last_sample_key != Some(sample_key)
+                            || last_state.as_ref() != Some(&sample.state)
+                        {
+                            let warnings = optional_field_warnings(&sample.state);
+                            if warnings != last_optional_warnings {
+                                for warning in &warnings {
+                                    warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, warning, "invalid optional aircraft field");
+                                }
+                                last_optional_warnings = warnings;
+                            }
+                            match frame_from_state(&sample.state) {
+                                Ok(frame) => {
+                                    if let Err(error) = session.apply(frame) {
+                                        error!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "failed to write MSFS state");
+                                        reconnect = true;
+                                        break;
+                                    }
+                                    last_sample_key = Some(sample_key);
+                                    last_state = Some(sample.state.clone());
+                                    stale_reported = false;
+                                }
+                                Err(error) => {
+                                    warn!(target: "fly_ruler_proto_msfs.bridge", %error, aircraft_id = id, "ignoring invalid aircraft state");
+                                    last_sample_key = Some(sample_key);
+                                    last_state = Some(sample.state.clone());
+                                }
                             }
                         }
-                    } else if !stale_reported
-                        && playback_state.mode == PlaybackMode::Live
-                        && last_new_sample.is_some_and(|seen| seen.elapsed() >= stale_timeout)
-                    {
-                        warn!(target: "fly_ruler_proto_msfs.bridge", aircraft_id = id, "aircraft state is stale; holding final MSFS pose");
-                        stale_reported = true;
                     }
+                }
+
+                if last_smoothing_log.elapsed() >= Duration::from_secs(5) {
+                    let stats = smoother.stats();
+                    info!(
+                        target: "fly_ruler_proto_msfs.bridge",
+                        aircraft_id = id,
+                        buffer_depth = smoother.len(),
+                        accepted_samples = stats.accepted_samples - last_smoothing_stats.accepted_samples,
+                        dropped_out_of_order = stats.dropped_out_of_order - last_smoothing_stats.dropped_out_of_order,
+                        dropped_invalid_timestamp = stats.dropped_invalid_timestamp - last_smoothing_stats.dropped_invalid_timestamp,
+                        latest_frames = stats.latest_frames - last_smoothing_stats.latest_frames,
+                        interpolated_frames = stats.interpolated_frames - last_smoothing_stats.interpolated_frames,
+                        extrapolated_frames = stats.extrapolated_frames - last_smoothing_stats.extrapolated_frames,
+                        held_frames = stats.held_frames - last_smoothing_stats.held_frames,
+                        "MSFS live smoothing statistics"
+                    );
+                    last_smoothing_stats = stats;
+                    last_smoothing_log = Instant::now();
                 }
             }
 

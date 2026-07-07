@@ -6,6 +6,10 @@ use fly_ruler_proto_core::pb;
 use fly_ruler_proto_core::{Event, PlaybackMode, TimeSeriesStore};
 use thiserror::Error;
 
+#[cfg(windows)]
+pub mod simconnect;
+pub mod smoothing;
+
 /// Reserved FlyRuler custom events understood by the MSFS bridge.
 pub mod events {
     /// Retract the landing gear through the MSFS gear handle.
@@ -69,12 +73,10 @@ pub struct ControlSurfaces {
     pub spoilers_ratio: Option<f64>,
 }
 
-/// Air-relative velocity and angular rates expressed in MSFS body axes.
+/// Body velocity and angular rates expressed in MSFS body axes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct MsfsAirData {
-    /// True airspeed in meters per second.
-    pub true_airspeed_mps: f64,
     /// Lateral velocity, positive right.
     pub velocity_body_x_mps: f64,
     /// Vertical velocity, positive up.
@@ -171,27 +173,12 @@ pub trait Simulator {
     fn set_pose(&mut self, pose: MsfsPose) -> Result<(), Self::Error>;
     /// Write one optional control-surface value.
     fn set_surface(&mut self, surface: Surface, value: f64) -> Result<(), Self::Error>;
-    /// Write body velocity, angular rates, and true airspeed.
+    /// Write body velocity and angular rates.
     fn set_airdata(&mut self, airdata: MsfsAirData) -> Result<(), Self::Error>;
     /// Write one indexed engine throttle lever position.
     fn set_engine_throttle(&mut self, index: u32, ratio: f64) -> Result<(), Self::Error>;
     /// Move the landing-gear handle to a deterministic position.
     fn set_landing_gear(&mut self, command: GearCommand) -> Result<(), Self::Error>;
-}
-
-/// Return whether an aircraft's latest lifecycle event leaves it spawned.
-pub fn is_spawned(store: &TimeSeriesStore, id: &str) -> bool {
-    is_spawned_at(store, id, f64::INFINITY)
-}
-
-/// Return whether an aircraft is spawned at the supplied global cursor.
-pub fn is_spawned_at(store: &TimeSeriesStore, id: &str, timestamp_secs: f64) -> bool {
-    store.is_spawned_at(&id.to_owned(), timestamp_secs)
-}
-
-/// Select a requested active aircraft or the earliest active spawn.
-pub fn select_aircraft(store: &TimeSeriesStore, requested: Option<&str>) -> Option<String> {
-    select_aircraft_at(store, requested, f64::INFINITY)
 }
 
 /// Select an active aircraft at a global replay cursor.
@@ -201,14 +188,25 @@ pub fn select_aircraft_at(
     timestamp_secs: f64,
 ) -> Option<String> {
     if let Some(id) = requested {
-        return is_spawned_at(store, id, timestamp_secs).then(|| id.to_owned());
+        return store
+            .is_spawned_at(&id.to_owned(), timestamp_secs)
+            .then(|| id.to_owned());
     }
 
     store
         .get_aircraft_ids()
         .into_iter()
-        .filter(|id| is_spawned_at(store, id, timestamp_secs))
-        .filter_map(|id| first_spawn_timestamp(store, &id).map(|timestamp| (timestamp, id)))
+        .filter(|id| store.is_spawned_at(&id.to_owned(), timestamp_secs))
+        .filter_map(|id| {
+            // first spawn timestamp of each aircraft
+            store
+                .get_events_range(&id, f64::NEG_INFINITY, f64::INFINITY)?
+                .into_iter()
+                .find_map(|entry| {
+                    matches!(entry.event, Event::Spawn(_)).then_some(entry.timestamp_secs)
+                })
+                .map(|timestamp| (timestamp, id))
+        })
         .filter(|(spawn_timestamp, _)| *spawn_timestamp <= timestamp_secs)
         .min_by(|left, right| {
             left.0
@@ -216,13 +214,6 @@ pub fn select_aircraft_at(
                 .then_with(|| left.1.cmp(&right.1))
         })
         .map(|(_, id)| id)
-}
-
-fn first_spawn_timestamp(store: &TimeSeriesStore, id: &String) -> Option<f64> {
-    store
-        .get_events_range(id, f64::NEG_INFINITY, f64::INFINITY)?
-        .into_iter()
-        .find_map(|entry| matches!(entry.event, Event::Spawn(_)).then_some(entry.timestamp_secs))
 }
 
 /// Tracks landing-gear events across live and replay cursor changes.
@@ -468,8 +459,8 @@ pub fn frame_from_state(state: &pb::AircraftState) -> Result<MsfsFrame, FrameErr
 /// Describe invalid optional fields isolated from an otherwise valid frame.
 pub fn optional_field_warnings(state: &pb::AircraftState) -> Vec<&'static str> {
     let mut warnings = Vec::new();
-    if state.derived.is_some() && airdata_from_state(state).is_none() {
-        warnings.push("invalid alpha, beta, or true airspeed; airdata was not written");
+    if state.velocity.is_some() && airdata_from_state(state).is_none() {
+        warnings.push("invalid body velocity or angular velocity; airdata was not written");
     }
 
     if let Some(controls) = state.control_surfaces.as_ref() {
@@ -515,20 +506,15 @@ fn finite(value: f64, name: &'static str) -> Result<(), FrameError> {
     }
 }
 
-fn field_f64(field: &pb::CustomField) -> Option<f64> {
-    match field.value.as_ref()?.kind.as_ref()? {
-        pb::field_value::Kind::F64Value(value) if value.is_finite() => Some(*value),
-        pb::field_value::Kind::I64Value(value) => Some(*value as f64),
-        _ => None,
-    }
-}
-
 fn controls_from_fields(fields_in: &[pb::CustomField]) -> ControlSurfaces {
     let mut out = ControlSurfaces::default();
     for field in fields_in {
-        let Some(value) = field_f64(field) else {
-            continue;
+        let value = match field.value.as_ref().and_then(|v| v.kind.as_ref()) {
+            Some(pb::field_value::Kind::F64Value(value)) => *value,
+            Some(pb::field_value::Kind::I64Value(value)) => *value as f64,
+            _ => continue,
         };
+
         match field.field_id.as_str() {
             fields::AILERON_LEFT => out.aileron_left_rad = Some(value),
             fields::AILERON_RIGHT => out.aileron_right_rad = Some(value),
@@ -588,32 +574,23 @@ fn controls_from_state(state: &pb::AircraftState) -> ControlSurfaces {
 }
 
 fn airdata_from_state(state: &pb::AircraftState) -> Option<MsfsAirData> {
-    let derived = state.derived.as_ref()?;
-    let (tas, alpha, beta) = (derived.tas, derived.alpha, derived.beta);
-    if !tas.is_finite()
-        || tas < 0.0
-        || !alpha.is_finite()
-        || !beta.is_finite()
-        || beta.abs() > std::f64::consts::FRAC_PI_2
-    {
+    let velocity = state.velocity.as_ref()?;
+    if !velocity.x.is_finite() || !velocity.y.is_finite() || !velocity.z.is_finite() {
         return None;
     }
 
-    // Reconstruct body-FRD air-relative velocity.
-    let u_forward = tas * alpha.cos() * beta.cos();
-    let v_right = tas * beta.sin();
-    let w_down = tas * alpha.sin() * beta.cos();
     let (p, q, r) = state
         .angular_velocity
         .as_ref()
         .filter(|omega| omega.x.is_finite() && omega.y.is_finite() && omega.z.is_finite())
         .map_or((0.0, 0.0, 0.0), |omega| (omega.x, omega.y, omega.z));
 
+    // FlyRuler velocity is body-FRD: X forward, Y right, Z down.
+    // MSFS body velocity SimVars use X right, Y up, Z forward.
     Some(MsfsAirData {
-        true_airspeed_mps: tas,
-        velocity_body_x_mps: v_right,
-        velocity_body_y_mps: -w_down,
-        velocity_body_z_mps: u_forward,
+        velocity_body_x_mps: velocity.y,
+        velocity_body_y_mps: -velocity.z,
+        velocity_body_z_mps: velocity.x,
         rotation_body_x_radps: q,
         rotation_body_y_radps: -r,
         rotation_body_z_radps: p,
@@ -651,6 +628,11 @@ fn control_values(controls: ControlSurfaces) -> impl Iterator<Item = (Surface, f
 mod tests {
     use super::*;
     use fly_ruler_proto_core::Event;
+
+    /// Select a requested active aircraft or the earliest active spawn.
+    fn select_aircraft(store: &TimeSeriesStore, requested: Option<&str>) -> Option<String> {
+        select_aircraft_at(store, requested, f64::INFINITY)
+    }
 
     fn state_with_yaw(yaw: f64) -> pb::AircraftState {
         pb::AircraftState {
@@ -746,12 +728,13 @@ mod tests {
     }
 
     #[test]
-    fn reconstructs_airdata_and_maps_body_axes() {
+    fn maps_proto_body_velocity_to_msfs_body_axes() {
         let mut state = state_with_yaw(0.0);
-        let derived = state.derived.as_mut().unwrap();
-        derived.tas = 100.0;
-        derived.alpha = 0.1;
-        derived.beta = -0.2;
+        state.velocity = Some(pb::Vector3 {
+            x: 101.0,
+            y: -12.0,
+            z: 5.0,
+        });
         state.angular_velocity = Some(pb::Vector3 {
             x: 0.3,
             y: -0.4,
@@ -759,16 +742,22 @@ mod tests {
         });
 
         let airdata = frame_from_state(&state).unwrap().airdata.unwrap();
-        assert!((airdata.velocity_body_x_mps - 100.0 * (-0.2_f64).sin()).abs() < 1e-12);
-        assert!(
-            (airdata.velocity_body_y_mps + 100.0 * 0.1_f64.sin() * (-0.2_f64).cos()).abs() < 1e-12
-        );
-        assert!(
-            (airdata.velocity_body_z_mps - 100.0 * 0.1_f64.cos() * (-0.2_f64).cos()).abs() < 1e-12
-        );
+        assert_eq!(airdata.velocity_body_x_mps, -12.0);
+        assert_eq!(airdata.velocity_body_y_mps, -5.0);
+        assert_eq!(airdata.velocity_body_z_mps, 101.0);
         assert_eq!(airdata.rotation_body_x_radps, -0.4);
         assert_eq!(airdata.rotation_body_y_radps, -0.5);
         assert_eq!(airdata.rotation_body_z_radps, 0.3);
+    }
+
+    #[test]
+    fn does_not_reconstruct_airdata_from_alpha_beta_and_tas() {
+        let mut state = state_with_yaw(0.0);
+        let derived = state.derived.as_mut().unwrap();
+        derived.tas = 100.0;
+        derived.alpha = 0.1;
+        derived.beta = -0.2;
+        assert!(frame_from_state(&state).unwrap().airdata.is_none());
     }
 
     #[test]
@@ -856,6 +845,11 @@ mod tests {
     #[test]
     fn session_freezes_before_writes_and_releases_once() {
         let mut state = state_with_yaw(0.0);
+        state.velocity = Some(pb::Vector3 {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        });
         state.custom_fields.push(custom(fields::ELEVATOR, 0.1));
         state.engines.push(pb::EngineState {
             index: 2,
@@ -903,7 +897,7 @@ mod tests {
             4.0,
             Event::Despawn(pb::DespawnInfo::default()),
         );
-        assert!(!is_spawned(&store, "first"));
+        assert!(!store.is_spawned_at(&"first".to_string(), f64::INFINITY));
         assert_eq!(select_aircraft(&store, None).as_deref(), Some("later"));
     }
 

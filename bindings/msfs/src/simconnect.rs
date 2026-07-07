@@ -6,7 +6,7 @@ use std::ptr;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fly_ruler_proto_msfs::{GearCommand, MsfsAirData, MsfsPose, Simulator, Surface};
+use crate::{GearCommand, MsfsAirData, MsfsPose, Simulator, Surface};
 use thiserror::Error;
 
 type Handle = *mut c_void;
@@ -255,7 +255,6 @@ impl SimConnectClient {
         }
 
         for (name, units) in [
-            ("AIRSPEED TRUE RAW", "meters per second"),
             ("VELOCITY BODY X", "meters per second"),
             ("VELOCITY BODY Y", "meters per second"),
             ("VELOCITY BODY Z", "meters per second"),

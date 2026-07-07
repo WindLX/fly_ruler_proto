@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use fly_ruler_proto_core::{LoggingConfig, ManagementConfig, RuntimeConfig};
+use fly_ruler_proto_msfs::smoothing::{LiveSmoothingConfig, SmoothingMode};
 use serde::Deserialize;
 
 const DEFAULT_CONFIG_FILE: &str = "fly-ruler-msfs.toml";
@@ -21,6 +22,14 @@ pub struct Args {
     pub aircraft_id: Option<String>,
     #[arg(long)]
     pub tick_hz: Option<f64>,
+    #[arg(long)]
+    pub render_hz: Option<f64>,
+    #[arg(long)]
+    pub interpolation_delay_ms: Option<u64>,
+    #[arg(long)]
+    pub max_extrapolation_ms: Option<u64>,
+    #[arg(long)]
+    pub smoothing_mode: Option<String>,
     #[arg(long)]
     pub stale_timeout_ms: Option<u64>,
     #[arg(long)]
@@ -61,6 +70,10 @@ struct BridgeSection {
     listen: Option<String>,
     aircraft_id: Option<String>,
     tick_hz: Option<f64>,
+    render_hz: Option<f64>,
+    interpolation_delay_ms: Option<u64>,
+    max_extrapolation_ms: Option<u64>,
+    smoothing_mode: Option<String>,
     stale_timeout_ms: Option<u64>,
 }
 
@@ -90,7 +103,9 @@ pub struct BridgeConfig {
     pub listen: String,
     pub aircraft_id: Option<String>,
     pub tick_hz: f64,
+    pub render_hz: f64,
     pub stale_timeout_ms: u64,
+    pub smoothing: LiveSmoothingConfig,
     pub management_enabled: bool,
     pub http_listen: String,
     pub runtime: RuntimeConfig,
@@ -126,6 +141,34 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "127.0.0.1:18002".to_string());
     let aircraft_id = args.aircraft_id.or(file.bridge.aircraft_id);
     let tick_hz = args.tick_hz.or(file.bridge.tick_hz).unwrap_or(240.0);
+    let render_hz = args.render_hz.or(file.bridge.render_hz).unwrap_or(tick_hz);
+
+    let raw_smoothing_mode = args
+        .smoothing_mode
+        .or(file.bridge.smoothing_mode)
+        .unwrap_or_else(|| "low_latency".to_string());
+    let smoothing_mode = match SmoothingMode::parse(&raw_smoothing_mode) {
+        Some(mode) => mode,
+        None => {
+            return Err(format!("smoothing_mode must be one of latest, low_latency, or smooth; got {raw_smoothing_mode}").into())
+        }
+    };
+    let interpolation_delay = args
+        .interpolation_delay_ms
+        .or(file.bridge.interpolation_delay_ms)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| smoothing_mode.default_interpolation_delay());
+    let max_extrapolation = args
+        .max_extrapolation_ms
+        .or(file.bridge.max_extrapolation_ms)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| smoothing_mode.default_max_extrapolation());
+    let smoothing = LiveSmoothingConfig {
+        mode: smoothing_mode,
+        interpolation_delay,
+        max_extrapolation,
+        ..LiveSmoothingConfig::default()
+    };
     let stale_timeout_ms = args
         .stale_timeout_ms
         .or(file.bridge.stale_timeout_ms)
@@ -178,12 +221,32 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
             .map(|path| resolve_path(path, &base_dir).to_string_lossy().to_string()),
     };
 
-    validate(tick_hz, websocket_hz, aircraft_id.as_deref())?;
+    // Validate the configuration values before returning the final config.
+    if !tick_hz.is_finite() || tick_hz <= 0.0 {
+        return Err("tick_hz must be finite and greater than zero".into());
+    }
+    if !render_hz.is_finite() || render_hz <= 0.0 {
+        return Err("render_hz must be finite and greater than zero".into());
+    }
+    if !websocket_hz.is_finite() || websocket_hz <= 0.0 {
+        return Err("management.ws_hz must be finite and greater than zero".into());
+    }
+    if smoothing.max_samples == 0 {
+        return Err("smoothing max_samples must be greater than zero".into());
+    }
+    if let Some(id) = &aircraft_id {
+        if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("aircraft_id must be a 32-character hexadecimal UUID".into());
+        }
+    }
+
     Ok(BridgeConfig {
         listen,
         aircraft_id,
         tick_hz,
+        render_hz,
         stale_timeout_ms,
+        smoothing,
         management_enabled,
         http_listen,
         runtime: RuntimeConfig {
@@ -210,25 +273,6 @@ fn resolve_path(path: PathBuf, base_dir: &Path) -> PathBuf {
     }
 }
 
-fn validate(
-    tick_hz: f64,
-    websocket_hz: f64,
-    aircraft_id: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !tick_hz.is_finite() || tick_hz <= 0.0 {
-        return Err("tick_hz must be finite and greater than zero".into());
-    }
-    if !websocket_hz.is_finite() || websocket_hz <= 0.0 {
-        return Err("management.ws_hz must be finite and greater than zero".into());
-    }
-    if let Some(id) = aircraft_id {
-        if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("aircraft_id must be a 32-character hexadecimal UUID".into());
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +283,10 @@ mod tests {
             listen: None,
             aircraft_id: None,
             tick_hz: None,
+            render_hz: None,
+            interpolation_delay_ms: None,
+            max_extrapolation_ms: None,
+            smoothing_mode: None,
             stale_timeout_ms: None,
             http_listen: None,
             data_root: None,
@@ -260,6 +308,16 @@ mod tests {
         assert_eq!(config.listen, "127.0.0.1:18002");
         assert_eq!(config.http_listen, "127.0.0.1:18003");
         assert_eq!(config.tick_hz, 240.0);
+        assert_eq!(config.render_hz, 240.0);
+        assert_eq!(config.smoothing.mode, SmoothingMode::LowLatency);
+        assert_eq!(
+            config.smoothing.interpolation_delay,
+            std::time::Duration::from_millis(30)
+        );
+        assert_eq!(
+            config.smoothing.max_extrapolation,
+            std::time::Duration::from_millis(40)
+        );
         assert!(config.management_enabled);
     }
 
@@ -267,10 +325,22 @@ mod tests {
     fn cli_values_override_defaults() {
         let mut cli = args();
         cli.tick_hz = Some(120.0);
+        cli.render_hz = Some(60.0);
+        cli.smoothing_mode = Some("smooth".to_string());
         cli.no_http = true;
         cli.log_level = Some("debug".to_string());
         let config = resolve(cli).unwrap();
         assert_eq!(config.tick_hz, 120.0);
+        assert_eq!(config.render_hz, 60.0);
+        assert_eq!(config.smoothing.mode, SmoothingMode::Smooth);
+        assert_eq!(
+            config.smoothing.interpolation_delay,
+            std::time::Duration::from_millis(80)
+        );
+        assert_eq!(
+            config.smoothing.max_extrapolation,
+            std::time::Duration::from_millis(20)
+        );
         assert!(!config.management_enabled);
         assert_eq!(config.runtime.logging.level, "debug");
     }
@@ -281,12 +351,18 @@ mod tests {
         cli.tick_hz = Some(0.0);
         assert!(resolve(cli).is_err());
         let mut cli = args();
+        cli.render_hz = Some(0.0);
+        assert!(resolve(cli).is_err());
+        let mut cli = args();
+        cli.smoothing_mode = Some("rubber_band".to_string());
+        assert!(resolve(cli).is_err());
+        let mut cli = args();
         cli.aircraft_id = Some("bad".to_string());
         assert!(resolve(cli).is_err());
     }
 
     #[test]
-    fn toml_paths_are_relative_to_config_and_cli_wins() {
+    fn toml_paths_are_relative_to_launch_directory_and_cli_wins() {
         let root = std::env::temp_dir().join(format!(
             "fly-ruler-msfs-config-{}",
             std::time::SystemTime::now()
@@ -301,6 +377,10 @@ mod tests {
             r#"
 [bridge]
 tick_hz = 75.0
+render_hz = 90.0
+smoothing_mode = "latest"
+interpolation_delay_ms = 12
+max_extrapolation_ms = 34
 
 [management]
 enabled = false
@@ -321,6 +401,16 @@ file_path = "logs/bridge.log"
         cli.http = true;
         let config = resolve(cli).unwrap();
         assert_eq!(config.tick_hz, 120.0);
+        assert_eq!(config.render_hz, 90.0);
+        assert_eq!(config.smoothing.mode, SmoothingMode::Latest);
+        assert_eq!(
+            config.smoothing.interpolation_delay,
+            std::time::Duration::from_millis(12)
+        );
+        assert_eq!(
+            config.smoothing.max_extrapolation,
+            std::time::Duration::from_millis(34)
+        );
         assert!(config.management_enabled);
         // Relative paths are resolved from the current working directory, not
         // from the config file location.

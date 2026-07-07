@@ -44,7 +44,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Networking client/server
     m.add_class::<PyClient>()?;
-    m.add_class::<PyServer>()?;
 
     // Protocol version function
     m.add_function(wrap_pyfunction!(serialize_inner::get_protocol_version, m)?)?;

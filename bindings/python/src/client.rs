@@ -6,11 +6,11 @@
 use std::sync::OnceLock;
 
 use fly_ruler_proto_core::pb;
-use fly_ruler_proto_core::transport::{AircraftClient, Server as RustServer};
-use fly_ruler_proto_core::{init_logging, LoggingConfig, TransportConfig};
+use fly_ruler_proto_core::transport::AircraftClient;
+use fly_ruler_proto_core::{init_logging, LoggingConfig};
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::protocol::PyAircraftState;
 
@@ -196,68 +196,5 @@ impl PyClient {
             ));
         }
         Ok(())
-    }
-}
-
-/// Low-level UDP server exposed to Python.
-///
-/// Intended primarily for testing; production servers should use
-/// `KernelRuntime` or the Godot binding.
-#[pyclass(name = "PyServer")]
-pub struct PyServer {
-    inner: Option<RustServer>,
-    addr: String,
-}
-
-#[pymethods]
-impl PyServer {
-    #[new]
-    fn new(addr: &str) -> PyResult<Self> {
-        let runtime = get_runtime()?;
-        info!(target: "fly_ruler_proto_python.server", addr = addr, "binding UDP server");
-        let server = runtime
-            .block_on(async { RustServer::bind(addr, TransportConfig::default()).await })
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))?;
-
-        Ok(Self {
-            inner: Some(server),
-            addr: addr.to_string(),
-        })
-    }
-
-    /// Return the local socket address as a string.
-    fn local_addr(&self) -> PyResult<String> {
-        let addr = self
-            .inner
-            .as_ref()
-            .map(|s| {
-                s.local_addr()
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|_| self.addr.clone())
-            })
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyConnectionError, _>("not listening"))?;
-
-        debug!(target: "fly_ruler_proto_python.server", local_addr = addr, "queried local_addr");
-        Ok(addr)
-    }
-
-    /// Close the server socket.
-    fn close(&mut self) -> PyResult<()> {
-        info!(target: "fly_ruler_proto_python.server", "closing server handle");
-        if let Some(server) = self.inner.take() {
-            let runtime = get_runtime()?;
-            runtime
-                .block_on(async { server.close().await })
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyConnectionError, _>(e.to_string()))?;
-        }
-        Ok(())
-    }
-
-    fn __repr__(&self) -> String {
-        format!("PyServer(addr='{}')", self.addr)
-    }
-
-    fn __del__(&mut self) {
-        let _ = self.close();
     }
 }

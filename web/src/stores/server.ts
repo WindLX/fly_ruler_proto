@@ -28,8 +28,14 @@ export const useServerStore = defineStore('server', () => {
   const workspaceRevision = ref(0)
   let socket: WebSocket | null = null
   let reconnectTimer: number | null = null
+  let aircraftRefreshPending = false
 
   const playback = computed(() => status.value?.playback ?? null)
+  const availableAircraftIds = computed(() => {
+    const ids = new Set(aircraft.value.map((item) => item.id))
+    for (const id of Object.keys(samples.value)) ids.add(id)
+    return [...ids]
+  })
 
   async function refreshTimeline(bounds = status.value?.playback.bounds ?? null) {
     if (bounds) {
@@ -79,10 +85,30 @@ export const useServerStore = defineStore('server', () => {
           ? { ...status.value, playback: message.playback, store: message.store }
           : null
         const next = { ...samples.value }
+        let hasUnknownAircraft = false
         for (const [id, aircraftSnapshot] of Object.entries(message.aircraft)) {
           next[id] = aircraftSnapshot.sample
+          if (!aircraft.value.some((item) => item.id === id)) {
+            hasUnknownAircraft = true
+            aircraft.value = [
+              ...aircraft.value,
+              {
+                id,
+                name: null,
+                toml_config: null,
+                time_range: [
+                  aircraftSnapshot.sample.timestamp_secs,
+                  aircraftSnapshot.sample.timestamp_secs,
+                ],
+                state_count: 1,
+                event_count: 0,
+                spawned_at_cursor: aircraftSnapshot.spawned,
+              },
+            ]
+          }
         }
         samples.value = next
+        if (hasUnknownAircraft) void refreshAircraftSoon()
         if (previousEventCount !== message.store.event_count) {
           void refreshTimeline(message.playback.bounds)
         }
@@ -95,6 +121,8 @@ export const useServerStore = defineStore('server', () => {
           void refresh()
         }
       } else if (message.type === 'store_changed') {
+        samples.value = {}
+        aircraft.value = []
         storeRevision.value++
         void refresh()
       } else if (message.type === 'workspace_changed') {
@@ -145,6 +173,19 @@ export const useServerStore = defineStore('server', () => {
     error.value = cause instanceof Error ? cause.message : String(cause)
   }
 
+  async function refreshAircraftSoon() {
+    if (aircraftRefreshPending) return
+    aircraftRefreshPending = true
+    try {
+      await refresh()
+    } catch {
+      // Keep optimistic snapshot-discovered aircraft visible; the websocket
+      // reconnect/error path already reports connection-level failures.
+    } finally {
+      aircraftRefreshPending = false
+    }
+  }
+
   return {
     connected,
     status,
@@ -156,6 +197,7 @@ export const useServerStore = defineStore('server', () => {
     timelineTruncated,
     error,
     playback,
+    availableAircraftIds,
     storeRevision,
     workspaceRevision,
     refresh,

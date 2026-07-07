@@ -18,7 +18,6 @@ UDP 网络  →  Fly Ruler Server / MSFS / Godot
 
 - `PyClient`：Rust 实现的 aircraft-bound 客户端（一个实例对应一架飞行器）。
 - `FlyRulerClient`：Python 高层包装，提供上下文管理器与最佳实践。
-- `PyServer`：底层 UDP 服务端包装（主要用于测试或特殊场景）。
 
 发送到 `fly-ruler-server` 的状态可以在同仓库 Web 控制台中实时查看、绘制 历史曲线、按事件跳转和回放。显式 `timestamp` 仍使用秒；推荐 Unix wall time，前端会自动转换为相对仿真时间显示。
 
@@ -297,19 +296,6 @@ client = PyClient(
 - `PyClient` 在析构时 `__del__` 会尝试自动调用 `close()`。
 - `FlyRulerClient` 提供更符合 Python 习惯的高阶封装（上下文管理器、`create_aircraft_state` 集成等）。
 
-## 6. `PyServer` — 底层 UDP 服务端
-
-主要用于测试或需要直接操作 UDP socket 的场景。
-
-```python
-from fly_ruler_proto_python._core import PyServer
-
-server = PyServer("127.0.0.1:18002")
-print(server.local_addr())
-server.close()
-```
-
-> 注：生产环境推荐使用 Rust 的 `KernelRuntime` 或 Godot 的 `FlyRulerServer`，它们提供完整的会话管理、心跳握手与时序存储。
 
 ## 7. 协议版本
 
@@ -324,7 +310,7 @@ print(get_protocol_version())     # "1.0.0"
 
 ## 8. 日志
 
-Python 绑定在首次创建运行时（即构造 `PyClient` / `PyServer`）时，会初始化一次 `tracing` 订阅器。初始化是幂等的。
+Python 绑定在首次创建运行时（即构造 `PyClient` ）时，会初始化一次 `tracing` 订阅器。初始化是幂等的。
 
 默认日志过滤：
 
@@ -420,7 +406,7 @@ build-backend = "maturin"
 
 [project]
 name = "fly_ruler_proto_python"
-version = "0.2.2"
+version = "0.2.3"
 requires-python = ">=3.10"
 ```
 

@@ -10,7 +10,6 @@ import TimelineBar from '@/components/TimelineBar.vue'
 import { useSeriesStore } from '@/stores/series'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { extractValue } from '@/utils'
 import { usePlaybackShortcuts } from '@/usePlaybackShortcuts'
 
 const server = useServerStore()
@@ -46,7 +45,7 @@ watch(
 
 watch(
   [
-    () => server.aircraft.map((aircraft) => aircraft.id).join('|'),
+    () => server.availableAircraftIds.join('|'),
     () => server.playback?.bounds?.[0] ?? null,
     () => server.playback?.bounds?.[1] ?? null,
     () => server.storeRevision,
@@ -78,17 +77,22 @@ watch(
 watch(
   () => server.samples,
   (samples) => {
-    if (server.playback?.mode !== 'live') return
-    for (const curve of allCurves.value) {
-      const sample = samples[curve.aircraft_id]
-      if (!sample) continue
-      const value = extractValue(sample.state, curve.selector)
-      if (value !== null) {
-        series.appendLive(curve, sample.timestamp_secs, value, workspace.workspace.max_points)
-      }
-    }
+    series.mergeLiveSamples(
+      allCurves.value,
+      samples,
+      workspace.workspace.max_points,
+      server.playback?.mode === 'live',
+    )
   },
   { deep: true },
+)
+
+watch(
+  () => server.storeRevision,
+  () => {
+    series.clear()
+  },
+  { flush: 'sync' },
 )
 </script>
 

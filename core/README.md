@@ -119,6 +119,7 @@ message EngineState {
 
 message AircraftState {
   Vector3              position         = 1;
+  // 机体系 FRD 速度，单位 m/s：x 前、y 右、z 下。
   Vector3              velocity         = 2;
   Quaternion           attitude         = 3;
   Vector3              angular_velocity = 4;

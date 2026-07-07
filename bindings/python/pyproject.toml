@@ -1,6 +1,6 @@
 [project]
 name = "fly_ruler_proto_python"
-version = "0.2.2"
+version = "0.2.3"
 description = "Add your description here"
 readme = "README.md"
 authors = [
