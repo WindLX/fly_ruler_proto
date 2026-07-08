@@ -8,8 +8,8 @@ render_hz = 240.0
 # low_latency is the default: 30 ms interpolation delay + 40 ms short extrapolation.
 # smooth uses 80 ms interpolation delay + 20 ms short extrapolation.
 smoothing_mode = "low_latency"
-interpolation_delay_ms = 30
-max_extrapolation_ms = 40
+interpolation_delay_ms = 20
+max_extrapolation_ms = 20
 stale_timeout_ms = 500
 
 [management]

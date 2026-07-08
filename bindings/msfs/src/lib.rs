@@ -355,6 +355,17 @@ impl<S: Simulator> BridgeSession<S> {
             self.simulator.set_frozen(true)?;
             self.frozen = true;
         }
+        tracing::debug!(
+            target: "fly_ruler_proto_msfs.bridge",
+            altitude_m = frame.pose.altitude_m,
+            pitch_rad = frame.pose.pitch_rad,
+            bank_rad = frame.pose.bank_rad,
+            heading_true_rad = frame.pose.heading_true_rad,
+            velocity_body_x_mps = frame.airdata.map(|value| value.velocity_body_x_mps),
+            velocity_body_y_mps = frame.airdata.map(|value| value.velocity_body_y_mps),
+            velocity_body_z_mps = frame.airdata.map(|value| value.velocity_body_z_mps),
+            "writing MSFS frame"
+        );
         self.simulator.set_pose(frame.pose)?;
         if let Some(airdata) = frame.airdata {
             self.simulator.set_airdata(airdata)?;
