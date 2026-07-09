@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   defaultWorkspace,
   effectiveTimeRange,
+  eventFrameWindowSecs,
   extractValue,
   formatAbsoluteTime,
   formatNumber,
@@ -87,6 +88,12 @@ describe('series helpers', () => {
     const offsetTicks = generateTimelineTicks(10, 800, 84, 10)
     expect(offsetTicks.some((tick) => tick.label === '+00:12')).toBe(true)
     expect(offsetTicks.every((tick) => tick.value >= 10 && tick.value <= 20)).toBe(true)
+  })
+
+  it('derives a bounded event frame window from timeline scale', () => {
+    expect(eventFrameWindowSecs([0, 30], 1_000)).toBeCloseTo(0.3)
+    expect(eventFrameWindowSecs([0, 3_600], 1_000)).toBe(0.5)
+    expect(eventFrameWindowSecs(null)).toBe(1e-6)
   })
 
   it('zooms a time range around the requested anchor and clamps to bounds', () => {

@@ -635,6 +635,11 @@ fn control_values(controls: ControlSurfaces) -> impl Iterator<Item = (Surface, f
     .filter_map(|(surface, value)| value.map(|value| (surface, value)))
 }
 
+/// Iterate over valid optional control-surface writes in a frame.
+pub fn frame_control_values(frame: MsfsFrame) -> impl Iterator<Item = (Surface, f64)> {
+    control_values(frame.controls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -296,6 +296,52 @@ client = PyClient(
 - `PyClient` 在析构时 `__del__` 会尝试自动调用 `close()`。
 - `FlyRulerClient` 提供更符合 Python 习惯的高阶封装（上下文管理器、`create_aircraft_state` 集成等）。
 
+## 6. MSFS 多机/AI 示例
+
+一个 `FlyRulerClient` 实例对应一架 aircraft。你可以：
+
+- 在同一个 Python 进程里创建多个 `FlyRulerClient`。
+- 或者启动多个 Python client 进程，分别发送不同 aircraft。
+
+MSFS bridge 会把一个 aircraft 映射到 user aircraft；当 bridge 使用
+`--enable-ai-aircraft` 启动时，其余 spawned aircraft 会作为 AI 视觉飞机渲染。
+
+先启动 bridge：
+
+```bash
+./fly-ruler-msfs-bridge.exe \
+  --enable-ai-aircraft \
+  --ai-aircraft-title "Rafale M" \
+  --max-ai-aircraft 8
+```
+
+然后从一个进程发送三架飞机：
+
+```bash
+cd bindings/python
+uv run python examples/demo_msfs_ai_client.py --aircraft-count 3
+```
+
+脚本会打印每架飞机的 `aircraft_uuid`。如果希望固定哪一架是 MSFS user aircraft，
+把对应 UUID 传给 bridge：
+
+```bash
+./fly-ruler-msfs-bridge.exe \
+  --aircraft-id <printed-aircraft-uuid-without-dashes> \
+  --enable-ai-aircraft \
+  --ai-aircraft-title "Rafale M"
+```
+
+也可以启动多个独立进程，每个进程只发送一架：
+
+```bash
+uv run python examples/demo_msfs_ai_client.py --aircraft-count 3 --aircraft-index 0
+uv run python examples/demo_msfs_ai_client.py --aircraft-count 3 --aircraft-index 1
+uv run python examples/demo_msfs_ai_client.py --aircraft-count 3 --aircraft-index 2
+```
+
+注意：`--ai-aircraft-title` 必须是 MSFS 里可用的 aircraft title；复杂第三方飞机在
+AI 模式下可能不会完整驱动座舱/HUD/插件动画，建议先用 stock aircraft 验证多机外部视景。
 
 ## 7. 协议版本
 

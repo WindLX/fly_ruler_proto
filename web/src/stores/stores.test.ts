@@ -146,7 +146,7 @@ describe('dashboard stores', () => {
     ])
   })
 
-  it('trims merged series to the newest max points', () => {
+  it('preserves already-loaded history when live points exceed the query point budget', () => {
     const key = curveKey(curve)
     const merged = mergeSeriesData(
       {
@@ -178,12 +178,13 @@ describe('dashboard stores', () => {
     )
 
     expect(merged.points).toEqual([
+      [1, 10],
       [2, 20],
       [3, 30],
       [4, 40],
     ])
-    expect(merged.returned_points).toBe(3)
-    expect(merged.stats).toMatchObject({ min: 20, max: 40, last: 40, start: 2, end: 4 })
+    expect(merged.returned_points).toBe(4)
+    expect(merged.stats).toMatchObject({ min: 10, max: 40, last: 40, start: 1, end: 4 })
   })
 
   it('commits grid layout into the persisted chart model', () => {

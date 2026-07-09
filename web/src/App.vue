@@ -75,16 +75,15 @@ watch(
 )
 
 watch(
-  () => server.samples,
-  (samples) => {
+  () => server.snapshotSequence,
+  () => {
     series.mergeLiveSamples(
       allCurves.value,
-      samples,
+      server.samples,
       workspace.workspace.max_points,
       server.playback?.mode === 'live',
     )
   },
-  { deep: true },
 )
 
 watch(

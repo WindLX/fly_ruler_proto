@@ -108,11 +108,76 @@ const palette = computed(() =>
       },
 )
 
+interface TransformedCache {
+  source: Array<[number, number]>
+  length: number
+  origin: number
+  scale: number
+  offset: number
+  lastTimestamp: number | null
+  lastValue: number | null
+  result: Array<[number, number]>
+}
+
+const transformedCache = new Map<string, TransformedCache>()
+
 function transformed(curve: CurveStyle): Array<[number, number]> {
-  return (seriesStore.data[curveKey(curve)]?.points ?? []).map(([time, value]) => [
+  const key = curveKey(curve)
+  const source = seriesStore.data[key]?.points ?? []
+  const last = source[source.length - 1]
+  const cached = transformedCache.get(key)
+  if (
+    cached &&
+    cached.source === source &&
+    cached.origin === timeOrigin.value &&
+    cached.scale === curve.scale &&
+    cached.offset === curve.offset
+  ) {
+    if (
+      cached.length === source.length &&
+      cached.lastTimestamp === (last?.[0] ?? null) &&
+      cached.lastValue === (last?.[1] ?? null)
+    ) {
+      return cached.result
+    }
+    const cachedTailStillMatches =
+      cached.length === 0 ||
+      (source[cached.length - 1]?.[0] === cached.lastTimestamp &&
+        source[cached.length - 1]?.[1] === cached.lastValue)
+    if (source.length >= cached.length && cachedTailStillMatches) {
+      const result = cached.result
+      if (source.length === cached.length && last) {
+        result[result.length - 1] = [
+          toRelativeTime(last[0], timeOrigin.value),
+          last[1] * curve.scale + curve.offset,
+        ]
+      } else {
+        for (let index = cached.length; index < source.length; index++) {
+          const [time, value] = source[index]!
+          result.push([toRelativeTime(time, timeOrigin.value), value * curve.scale + curve.offset])
+        }
+      }
+      cached.length = source.length
+      cached.lastTimestamp = last?.[0] ?? null
+      cached.lastValue = last?.[1] ?? null
+      return result
+    }
+  }
+  const result = source.map(([time, value]) => [
     toRelativeTime(time, timeOrigin.value),
     value * curve.scale + curve.offset,
-  ])
+  ]) as Array<[number, number]>
+  transformedCache.set(key, {
+    source,
+    length: source.length,
+    origin: timeOrigin.value,
+    scale: curve.scale,
+    offset: curve.offset,
+    lastTimestamp: last?.[0] ?? null,
+    lastValue: last?.[1] ?? null,
+    result,
+  })
+  return result
 }
 
 const option = computed<EChartsOption>(() => {
@@ -199,6 +264,7 @@ const option = computed<EChartsOption>(() => {
       {
         type: 'inside',
         filterMode: 'none',
+        throttle: 80,
         start:
           !hasAbsoluteZoom && typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
         end: !hasAbsoluteZoom && typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
@@ -208,6 +274,8 @@ const option = computed<EChartsOption>(() => {
       {
         type: 'slider',
         filterMode: 'none',
+        throttle: 120,
+        realtime: false,
         start:
           !hasAbsoluteZoom && typeof view.zoom_start === 'number' ? view.zoom_start : undefined,
         end: !hasAbsoluteZoom && typeof view.zoom_end === 'number' ? view.zoom_end : undefined,
@@ -215,6 +283,7 @@ const option = computed<EChartsOption>(() => {
         endValue: zoomEndValue,
         height: 14,
         bottom: 5,
+        showDataShadow: false,
         borderColor: palette.value.border,
         backgroundColor: palette.value.panel,
         fillerColor: palette.value.accentSoft,
@@ -227,6 +296,11 @@ const option = computed<EChartsOption>(() => {
       yAxisIndex: curve.y_axis === 'right' ? 1 : 0,
       showSymbol: curve.show_symbol,
       symbolSize: 5,
+      large: true,
+      largeThreshold: 2_000,
+      progressive: 4_000,
+      progressiveThreshold: 8_000,
+      sampling: 'lttb',
       smooth: curve.smooth,
       lineStyle: {
         color: curve.color,

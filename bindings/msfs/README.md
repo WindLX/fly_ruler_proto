@@ -94,6 +94,9 @@ Useful options:
 --interpolation-delay-ms 30
 --max-extrapolation-ms 40
 --stale-timeout-ms 500
+--enable-ai-aircraft
+--ai-aircraft-title "Rafale M"
+--max-ai-aircraft 8
 --http-listen 127.0.0.1:18003
 --data-root ./sessions
 --web-root ./web/dist
@@ -133,6 +136,42 @@ The smoothing modes are:
 `management.public_api_base_url` and `management.public_websocket_url` are optional. When omitted, the embedded Web console uses same-origin API paths. Set them only when the browser reaches the bridge through a reverse proxy or a different public host.
 
 The bridge uses the same `LoggingConfig` and tracing subscriber as Core and the Python binding. `RUST_LOG` has priority over the configured log level. Without `logging.file_path`, structured logs are written to the terminal.
+
+## Multi-aircraft AI rendering
+
+By default the bridge keeps the original single-aircraft behavior. To render additional FlyRuler aircraft, enable AI rendering:
+
+```bash
+./fly-ruler-msfs-bridge.exe \
+  --aircraft-id <main FlyRuler UUID> \
+  --enable-ai-aircraft \
+  --ai-aircraft-title "Rafale M" \
+  --max-ai-aircraft 8
+```
+
+The selected aircraft is still mapped to the MSFS user aircraft and keeps the native HUD/cockpit path. Other spawned FlyRuler aircraft are created through SimConnect as non-ATC AI aircraft, released from the MSFS AI controller, frozen, and then updated at the same render cadence as the user aircraft.
+
+`ai_aircraft_title` must match an aircraft preset/container title available in MSFS, for example a stock title or another installed aircraft that works as an AI object. The MVP uses one shared title for all AI aircraft. Complex third-party aircraft may not animate every cockpit, engine, or surface system correctly when instantiated as AI; use AI rendering primarily as an external visual/formation view.
+
+If SimConnect reports exception `22` / `CREATE_OBJECT_FAILED`, the bridge keeps running and retries later, but MSFS rejected the requested AI aircraft. The most common cause is an unavailable or non-AI-compatible `ai_aircraft_title`. On a Proton install, you can inspect Community aircraft titles with:
+
+```bash
+find "$HOME/.local/share/Steam/steamapps/compatdata/2537590/pfx/drive_c/users/steamuser/AppData/Roaming/Microsoft Flight Simulator 2024/Packages/Community" \
+  -name aircraft.cfg -print0 |
+  xargs -0 awk -F= 'tolower($1) ~ /^[[:space:]]*title[[:space:]]*$/ { print $2 }'
+```
+
+Then launch the bridge with a discovered title, for example:
+
+```bash
+./fly-ruler-msfs-bridge.exe \
+  --enable-ai-aircraft \
+  --ai-aircraft-title "Rafale M"
+```
+
+The AI object's tail number is a conservative `FR` prefix plus the first eight hexadecimal characters of the FlyRuler aircraft id. Some aircraft or SimConnect builds reject longer or more descriptive tail numbers during AI creation, so the bridge keeps this value deliberately simple. Use the FlyRuler Web console or bridge logs for full aircraft names and ids.
+
+Despawn, session clear/load, replay seek, and bridge shutdown remove AI objects created by the bridge. The bridge can only remove objects it created itself.
 
 ## State contract
 

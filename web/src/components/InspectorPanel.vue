@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { formatAbsoluteTime, formatRelativeTime } from '@/utils'
+import { eventFrameWindowSecs, formatAbsoluteTime, formatRelativeTime } from '@/utils'
 
 const server = useServerStore()
 const workspace = useWorkspaceStore()
@@ -14,7 +14,21 @@ const chart = computed(() => workspace.selectedChart)
 const currentFrameEvents = computed(() => {
   const cursor = server.playback?.cursor_secs
   if (cursor === null || cursor === undefined) return []
-  return server.timelineEvents.filter((event) => Math.abs(event.timestamp_secs - cursor) <= 1e-6)
+  const windowSecs = eventFrameWindowSecs(server.playback?.bounds ?? null)
+  const nearest = server.timelineEvents.reduce<number | null>((best, event) => {
+    const distance = Math.abs(event.timestamp_secs - cursor)
+    if (distance > windowSecs) return best
+    if (best === null || distance < Math.abs(best - cursor)) return event.timestamp_secs
+    return best
+  }, null)
+  if (nearest === null) return []
+  return server.timelineEvents
+    .filter((event) => Math.abs(event.timestamp_secs - nearest) <= windowSecs)
+    .sort((left, right) => {
+      const timeOrder = left.timestamp_secs - right.timestamp_secs
+      if (Math.abs(timeOrder) > 1e-9) return timeOrder
+      return (left.aircraft_id ?? '').localeCompare(right.aircraft_id ?? '')
+    })
 })
 const events = computed(() => {
   const id = workspace.workspace.selected_aircraft_id

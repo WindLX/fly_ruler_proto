@@ -14,6 +14,7 @@ import { useI18n } from 'vue-i18n'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
 import {
+  eventFrameWindowSecs,
   formatAbsoluteTime,
   formatRelativeTime,
   generateTimelineTicks,
@@ -34,6 +35,7 @@ const dragging = ref(false)
 const viewStart = ref(0)
 const viewEnd = ref(1)
 let resizeObserver: ResizeObserver | null = null
+let suppressTrackPointer = false
 
 const bounds = computed<[number, number]>(() => server.playback?.bounds ?? [0, 1])
 const fullSpan = computed(() => Math.max(bounds.value[1] - bounds.value[0], 0.001))
@@ -156,6 +158,10 @@ function timestampFromPointer(event: PointerEvent): number {
 }
 
 function startDrag(event: PointerEvent) {
+  if (suppressTrackPointer) {
+    suppressTrackPointer = false
+    return
+  }
   dragging.value = true
   preview.value = timestampFromPointer(event)
   window.addEventListener('pointermove', moveDrag)
@@ -203,19 +209,28 @@ function resetZoom() {
 
 function jumpCluster(cluster: (typeof eventClusters.value)[number]) {
   const cursor = server.playback?.cursor_secs ?? preview.value
-  const target = cluster.events.reduce((best, event) =>
-    Math.abs(event.timestamp_secs - cursor) < Math.abs(best.timestamp_secs - cursor) ? event : best,
-  )
-  preview.value = target.timestamp_secs
-  void server.seek(target.timestamp_secs)
+  const sorted = [...cluster.events].sort((left, right) => {
+    const timeOrder = left.timestamp_secs - right.timestamp_secs
+    if (Math.abs(timeOrder) > 1e-9) return timeOrder
+    return (left.aircraft_id ?? '').localeCompare(right.aircraft_id ?? '')
+  })
+  const windowSecs = eventFrameWindowSecs(bounds.value, contentWidth.value)
+  const next = sorted.find((event) => event.timestamp_secs > cursor + windowSecs * 0.5) ?? sorted[0]
+  if (!next) return
+  preview.value = next.timestamp_secs
+  void server.seek(next.timestamp_secs).catch(server.reportError)
+}
+
+function startEventJump() {
+  suppressTrackPointer = true
 }
 
 function stepEvent(direction: 'previous' | 'next') {
-  void server.step('event', direction, 1)
+  void server.step('event', direction, 1).catch(server.reportError)
 }
 
 function stepSample(direction: 'previous' | 'next') {
-  void server.step('sample', direction, 1)
+  void server.step('sample', direction, 1).catch(server.reportError)
 }
 
 function eventTitle(cluster: (typeof eventClusters.value)[number]): string {
@@ -339,13 +354,14 @@ onBeforeUnmount(() => {
       </div>
       <button
         v-for="cluster in eventClusters"
-        :key="`${cluster.pixel}:${cluster.events.length}`"
+        :key="`${cluster.pixel}:${cluster.events.length}:${cluster.events[0]?.timestamp_secs}`"
+        type="button"
         class="timeline-event"
         :class="`timeline-event-${cluster.events[0]?.event_type}`"
         :style="{ left: `${cluster.pixel}px` }"
         :title="eventTitle(cluster)"
-        @pointerdown.stop
-        @click.stop="jumpCluster(cluster)"
+        @pointerdown.stop.prevent="startEventJump"
+        @pointerup.stop.prevent="jumpCluster(cluster)"
       >
         <span v-if="cluster.events.length > 1">{{ cluster.events.length }}</span>
       </button>

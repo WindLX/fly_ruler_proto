@@ -33,6 +33,12 @@ pub struct Args {
     #[arg(long)]
     pub stale_timeout_ms: Option<u64>,
     #[arg(long)]
+    pub enable_ai_aircraft: bool,
+    #[arg(long)]
+    pub ai_aircraft_title: Option<String>,
+    #[arg(long)]
+    pub max_ai_aircraft: Option<usize>,
+    #[arg(long)]
     pub http_listen: Option<String>,
     #[arg(long)]
     pub data_root: Option<PathBuf>,
@@ -75,6 +81,9 @@ struct BridgeSection {
     max_extrapolation_ms: Option<u64>,
     smoothing_mode: Option<String>,
     stale_timeout_ms: Option<u64>,
+    enable_ai_aircraft: Option<bool>,
+    ai_aircraft_title: Option<String>,
+    max_ai_aircraft: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -105,6 +114,9 @@ pub struct BridgeConfig {
     pub tick_hz: f64,
     pub render_hz: f64,
     pub stale_timeout_ms: u64,
+    pub enable_ai_aircraft: bool,
+    pub ai_aircraft_title: String,
+    pub max_ai_aircraft: usize,
     pub smoothing: LiveSmoothingConfig,
     pub management_enabled: bool,
     pub http_listen: String,
@@ -173,6 +185,19 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
         .stale_timeout_ms
         .or(file.bridge.stale_timeout_ms)
         .unwrap_or(500);
+    let enable_ai_aircraft = if args.enable_ai_aircraft {
+        true
+    } else {
+        file.bridge.enable_ai_aircraft.unwrap_or(false)
+    };
+    let ai_aircraft_title = args
+        .ai_aircraft_title
+        .or(file.bridge.ai_aircraft_title)
+        .unwrap_or_else(|| "Rafale M".to_string());
+    let max_ai_aircraft = args
+        .max_ai_aircraft
+        .or(file.bridge.max_ai_aircraft)
+        .unwrap_or(8);
     let management_enabled = if args.http {
         true
     } else if args.no_http {
@@ -234,6 +259,12 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
     if smoothing.max_samples == 0 {
         return Err("smoothing max_samples must be greater than zero".into());
     }
+    if enable_ai_aircraft && ai_aircraft_title.trim().is_empty() {
+        return Err("ai_aircraft_title must not be empty when AI aircraft are enabled".into());
+    }
+    if max_ai_aircraft > 64 {
+        return Err("max_ai_aircraft must be at most 64".into());
+    }
     if let Some(id) = &aircraft_id {
         if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("aircraft_id must be a 32-character hexadecimal UUID".into());
@@ -246,6 +277,9 @@ fn resolve(args: Args) -> Result<BridgeConfig, Box<dyn std::error::Error>> {
         tick_hz,
         render_hz,
         stale_timeout_ms,
+        enable_ai_aircraft,
+        ai_aircraft_title,
+        max_ai_aircraft,
         smoothing,
         management_enabled,
         http_listen,
@@ -288,6 +322,9 @@ mod tests {
             max_extrapolation_ms: None,
             smoothing_mode: None,
             stale_timeout_ms: None,
+            enable_ai_aircraft: false,
+            ai_aircraft_title: None,
+            max_ai_aircraft: None,
             http_listen: None,
             data_root: None,
             web_root: None,
@@ -309,6 +346,9 @@ mod tests {
         assert_eq!(config.http_listen, "127.0.0.1:18003");
         assert_eq!(config.tick_hz, 240.0);
         assert_eq!(config.render_hz, 240.0);
+        assert!(!config.enable_ai_aircraft);
+        assert_eq!(config.ai_aircraft_title, "Rafale M");
+        assert_eq!(config.max_ai_aircraft, 8);
         assert_eq!(config.smoothing.mode, SmoothingMode::LowLatency);
         assert_eq!(
             config.smoothing.interpolation_delay,
@@ -329,6 +369,9 @@ mod tests {
         cli.smoothing_mode = Some("smooth".to_string());
         cli.no_http = true;
         cli.log_level = Some("debug".to_string());
+        cli.enable_ai_aircraft = true;
+        cli.ai_aircraft_title = Some("VL3 Asobo".to_string());
+        cli.max_ai_aircraft = Some(3);
         let config = resolve(cli).unwrap();
         assert_eq!(config.tick_hz, 120.0);
         assert_eq!(config.render_hz, 60.0);
@@ -343,6 +386,9 @@ mod tests {
         );
         assert!(!config.management_enabled);
         assert_eq!(config.runtime.logging.level, "debug");
+        assert!(config.enable_ai_aircraft);
+        assert_eq!(config.ai_aircraft_title, "VL3 Asobo");
+        assert_eq!(config.max_ai_aircraft, 3);
     }
 
     #[test]
@@ -358,6 +404,13 @@ mod tests {
         assert!(resolve(cli).is_err());
         let mut cli = args();
         cli.aircraft_id = Some("bad".to_string());
+        assert!(resolve(cli).is_err());
+        let mut cli = args();
+        cli.enable_ai_aircraft = true;
+        cli.ai_aircraft_title = Some("   ".to_string());
+        assert!(resolve(cli).is_err());
+        let mut cli = args();
+        cli.max_ai_aircraft = Some(65);
         assert!(resolve(cli).is_err());
     }
 
@@ -381,6 +434,9 @@ render_hz = 90.0
 smoothing_mode = "latest"
 interpolation_delay_ms = 12
 max_extrapolation_ms = 34
+enable_ai_aircraft = true
+ai_aircraft_title = "Rafale M"
+max_ai_aircraft = 4
 
 [management]
 enabled = false
@@ -411,6 +467,9 @@ file_path = "logs/bridge.log"
             config.smoothing.max_extrapolation,
             std::time::Duration::from_millis(34)
         );
+        assert!(config.enable_ai_aircraft);
+        assert_eq!(config.ai_aircraft_title, "Rafale M");
+        assert_eq!(config.max_ai_aircraft, 4);
         assert!(config.management_enabled);
         // Relative paths are resolved from the current working directory, not
         // from the config file location.

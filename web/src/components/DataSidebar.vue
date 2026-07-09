@@ -18,8 +18,13 @@ const sessionBusy = ref(false)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const confirmOpen = ref(false)
 const selectedAircraft = computed(() => workspace.workspace.selected_aircraft_id)
+const selectedAircraftAvailable = computed(
+  () => !!selectedAircraft.value && server.availableAircraftIds.includes(selectedAircraft.value),
+)
 const catalog = computed(() =>
-  selectedAircraft.value ? (series.catalogs[selectedAircraft.value] ?? []) : [],
+  selectedAircraftAvailable.value && selectedAircraft.value
+    ? (series.catalogs[selectedAircraft.value] ?? [])
+    : [],
 )
 const grouped = computed(() =>
   catalog.value.reduce<Record<string, typeof catalog.value>>((groups, field) => {
@@ -29,9 +34,11 @@ const grouped = computed(() =>
 )
 
 watch(
-  selectedAircraft,
-  (id) => {
-    if (id) void series.loadCatalog(id)
+  [selectedAircraft, () => server.availableAircraftIds.join('|')],
+  ([id]) => {
+    if (id && server.availableAircraftIds.includes(id)) {
+      void series.loadCatalog(id).catch(server.reportError)
+    }
   },
   { immediate: true },
 )
@@ -139,7 +146,7 @@ function addField(field: (typeof catalog.value)[number], index: number) {
 
     <section class="editor-section">
       <h2 class="editor-section-header">{{ t('sidebar.fields') }}</h2>
-      <div v-if="selectedAircraft" class="editor-section-body catalog-body">
+      <div v-if="selectedAircraftAvailable" class="editor-section-body catalog-body">
         <details v-for="(fields, group) in grouped" :key="group" open class="catalog-group">
           <summary class="catalog-summary">
             {{ groupLabel(String(group)) }}

@@ -244,6 +244,20 @@ export function generateTimelineTicks(
   return ticks
 }
 
+export function eventFrameWindowSecs(
+  bounds: [number, number] | null,
+  approximateWidth = 1_000,
+): number {
+  if (!bounds) return 1e-6
+  const span = Math.max(bounds[1] - bounds[0], 0)
+  if (!Number.isFinite(span) || span <= 0) return 1e-6
+  // Match the visual notion of a timeline cluster closely enough that
+  // multi-aircraft events rendered as one marker are also inspected together.
+  // The cap prevents long sessions from turning "current frame" into a broad
+  // search window.
+  return Math.max(1e-6, Math.min(0.5, span / Math.max(approximateWidth / 10, 1)))
+}
+
 export function zoomTimeRange(
   bounds: [number, number],
   view: [number, number],

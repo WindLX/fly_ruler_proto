@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, markRaw, ref, shallowRef } from 'vue'
 
 import { api, websocketUrl } from '@/api'
 import type {
@@ -19,13 +19,14 @@ export const useServerStore = defineStore('server', () => {
   const status = ref<ServerStatus | null>(null)
   const aircraft = ref<AircraftSummary[]>([])
   const sessions = ref<SessionSummary[]>([])
-  const samples = ref<Record<string, TimestampedState>>({})
+  const samples = shallowRef<Record<string, TimestampedState>>({})
   const operations = ref<Record<string, OperationRecord>>({})
   const timelineEvents = ref<AircraftEvent[]>([])
   const timelineTruncated = ref(false)
   const error = ref<string | null>(null)
   const storeRevision = ref(0)
   const workspaceRevision = ref(0)
+  const snapshotSequence = ref(0)
   let socket: WebSocket | null = null
   let reconnectTimer: number | null = null
   let aircraftRefreshPending = false
@@ -107,7 +108,8 @@ export const useServerStore = defineStore('server', () => {
             ]
           }
         }
-        samples.value = next
+        samples.value = markRaw(next)
+        snapshotSequence.value++
         if (hasUnknownAircraft) void refreshAircraftSoon()
         if (previousEventCount !== message.store.event_count) {
           void refreshTimeline(message.playback.bounds)
@@ -121,7 +123,8 @@ export const useServerStore = defineStore('server', () => {
           void refresh()
         }
       } else if (message.type === 'store_changed') {
-        samples.value = {}
+        samples.value = markRaw({})
+        snapshotSequence.value++
         aircraft.value = []
         storeRevision.value++
         void refresh()
@@ -200,6 +203,7 @@ export const useServerStore = defineStore('server', () => {
     availableAircraftIds,
     storeRevision,
     workspaceRevision,
+    snapshotSequence,
     refresh,
     refreshTimeline,
     connect,

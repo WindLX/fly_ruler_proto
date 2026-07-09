@@ -11,6 +11,12 @@ smoothing_mode = "low_latency"
 interpolation_delay_ms = 20
 max_extrapolation_ms = 20
 stale_timeout_ms = 500
+# Optional multi-aircraft rendering. The selected aircraft remains the MSFS
+# user aircraft; additional spawned FlyRuler aircraft are created as non-ATC AI
+# aircraft using this shared title.
+enable_ai_aircraft = false
+ai_aircraft_title = "Rafale M"
+max_ai_aircraft = 8
 
 [management]
 enabled = true
