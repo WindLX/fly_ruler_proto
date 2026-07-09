@@ -56,7 +56,7 @@ uv run python examples/demo_client.py
 从 Release 页面下载最新 MSFS 2024 桥接包（包含 `fly-ruler-msfs-bridge.exe`、`SimConnect.dll`、示例 TOML 和内置 Web 控制台）：
 
 ```bash
-wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.3/fly-ruler-msfs-windows-x86_64.zip
+wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.4/fly-ruler-msfs-windows-x86_64.zip
 unzip fly-ruler-msfs-windows-x86_64.zip -d fly-ruler-msfs
 ```
 
@@ -119,6 +119,28 @@ just build-msfs
 
 # 构建完整的 MSFS 发布包（包含前端 dist、SimConnect.dll、文档等）
 just package-msfs
+```
+
+## 统一更新版本号
+
+发布前可以用仓库脚本一次性更新 Rust workspace、核心
+`PROTOCOL_VERSION`、Cargo.lock、Python `pyproject.toml`、`uv.lock`、Web
+`package.json` 以及文档中的 Release 链接/示例版本：
+
+```bash
+# 先预览会改哪些文件
+just version 0.2.4 --dry-run
+
+# 正式更新；也支持 v0.2.4 写法
+just version 0.2.4
+```
+
+脚本只修改项目自身版本，不会创建 commit、tag 或上传包。更新后建议执行：
+
+```bash
+cargo metadata --format-version 1 >/dev/null
+cd bindings/python && uv lock
+cd ../../web && pnpm install --lockfile-only
 ```
 
 更多命令：

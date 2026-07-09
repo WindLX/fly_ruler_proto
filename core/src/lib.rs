@@ -25,7 +25,7 @@ pub mod transport;
 pub(crate) mod utils;
 
 /// Protocol semantic version shared across core and language bindings.
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+pub const PROTOCOL_VERSION: &str = "0.2.4";
 
 // Re-export commonly used types
 pub use config::{

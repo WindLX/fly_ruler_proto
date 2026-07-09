@@ -6,15 +6,14 @@ A high-performance binary serialization protocol library for aerospace flight si
 
 from fly_ruler_proto_python._core import (
     PROTOCOL_VERSION,
-    get_protocol_version,
-    Vector3,
-    Quaternion,
-    DerivedState,
-    ControlSurfaceState,
-    EngineState,
     AircraftState,
+    ControlSurfaceState,
+    DerivedState,
+    EngineState,
+    Quaternion,
+    Vector3,
+    get_protocol_version,
 )
-
 from fly_ruler_proto_python.client import FlyRulerClient, create_aircraft_state
 
 __all__ = [

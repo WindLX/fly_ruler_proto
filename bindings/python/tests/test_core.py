@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import fly_ruler_proto_python.client as client_module
 from fly_ruler_proto_python import (
+    PROTOCOL_VERSION,
     AircraftState,
     ControlSurfaceState,
     DerivedState,
     EngineState,
     FlyRulerClient,
-    PROTOCOL_VERSION,
     Quaternion,
     Vector3,
     create_aircraft_state,
@@ -165,7 +165,7 @@ class TestHelpers:
 
 class TestModuleApi:
     def test_protocol_version(self):
-        assert PROTOCOL_VERSION == "1.0.0"
+        assert PROTOCOL_VERSION == "0.2.4"
         assert get_protocol_version() == PROTOCOL_VERSION
 
 
@@ -197,13 +197,17 @@ class _FakePyClient:
     def aircraft_uuid(self) -> str:
         return "fake-aircraft-uuid"
 
-    def update_state(self, state: AircraftState, timestamp: float | None = None) -> None:
+    def update_state(
+        self, state: AircraftState, timestamp: float | None = None
+    ) -> None:
         self.calls.append(("update_state", state, timestamp))
 
     def create_event(self, event_name: str, timestamp: float | None = None) -> None:
         self.calls.append(("create_event", event_name, timestamp))
 
-    def despawn(self, reason: str | None = None, timestamp: float | None = None) -> None:
+    def despawn(
+        self, reason: str | None = None, timestamp: float | None = None
+    ) -> None:
         self.calls.append(("despawn", reason, timestamp))
 
     def close(self) -> None:

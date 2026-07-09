@@ -14,7 +14,7 @@ fn uuid(seed: u8) -> pb::Uuid {
 }
 
 fn handshake_message(client_uuid: pb::Uuid) -> pb::Message {
-    handshake_message_with_version(client_uuid, "1.0.0")
+    handshake_message_with_version(client_uuid, "0.2.4")
 }
 
 fn handshake_message_with_version(client_uuid: pb::Uuid, version: &str) -> pb::Message {

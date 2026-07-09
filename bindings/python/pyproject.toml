@@ -1,6 +1,6 @@
 [project]
 name = "fly_ruler_proto_python"
-version = "0.2.3"
+version = "0.2.4"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -27,5 +27,17 @@ build-backend = "maturin"
 [dependency-groups]
 dev = [
     "pytest>=9.1.0",
+    "ruff>=0.14.0",
     "patchelf>=0.17; sys_platform == 'linux'",
 ]
+
+[tool.pyright]
+include = ["src"]
+strict = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

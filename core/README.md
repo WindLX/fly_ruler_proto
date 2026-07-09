@@ -14,7 +14,7 @@
 | 传输层 | UDP（Tokio `UdpSocket`） |
 | 会话管理 | 应用层会话，基于 `client_uuid` + 握手/心跳维护 |
 | 序列化 | `prost` 生成 Rust 类型，运行时编码/解码 |
-| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "1.0.0"` |
+| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "0.2.4"` |
 
 ### 1.2 消息帧格式
 
@@ -229,7 +229,7 @@ message Message {
 ### 4.1 `lib.rs` — 公共 API 入口
 
 ```rust
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+pub const PROTOCOL_VERSION: &str = "0.2.4";
 ```
 
 对外导出：

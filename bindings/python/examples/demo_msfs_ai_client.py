@@ -186,7 +186,9 @@ def main() -> int:
                 ),
             )
             clients.append((client, demo))
-            role = "candidate user aircraft" if demo.index == 0 else "AI visual aircraft"
+            role = (
+                "candidate user aircraft" if demo.index == 0 else "AI visual aircraft"
+            )
             print(
                 f"{args.name_prefix}-{demo.index + 1}: "
                 f"aircraft_uuid={client.aircraft_uuid} ({role})"
