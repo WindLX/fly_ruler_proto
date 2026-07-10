@@ -9,7 +9,7 @@ name = "_core"
 crate-type = ["cdylib"]
 # Rust unit tests are disabled for this crate because `cargo test` tries to link
 # a test binary against Python symbols. The binding is tested through Python-side
-# pytest after `maturin develop` (see `just test-py`).
+# pytest after `maturin develop` (see `just test-python`).
 test = false
 doctest = false
 

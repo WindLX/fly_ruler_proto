@@ -472,6 +472,6 @@ cargo test -p fly_ruler_proto_core
 
 - 内核文档：`../../core/README.md`
 - Python 绑定：`../python/README.md`
-- 项目总览：`../../CLAUDE.md`
+- 项目总览：`../../AGENTS.md`
 - Protobuf Schema：`../../proto/fly_ruler.proto`
 - 推荐布局：`templates/ADDON_LAYOUT.md`

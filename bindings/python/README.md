@@ -464,5 +464,5 @@ requires-python = ">=3.10"
 
 - 内核文档：`../../core/README.md`
 - Godot 绑定：`../godot/README.md`
-- 项目总览：`../../CLAUDE.md`
+- 项目总览：`../../AGENTS.md`
 - Protobuf Schema：`../../proto/fly_ruler.proto`

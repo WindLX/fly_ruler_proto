@@ -75,7 +75,7 @@ protontricks-launch --appid 2537590 \
 3. In another terminal, install the Python binding and start the demo:
 
    ```bash
-   just develop
+   just build-python-dev
    cd bindings/python
    uv run python examples/demo_msfs_client.py
    ```

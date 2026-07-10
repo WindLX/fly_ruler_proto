@@ -24,7 +24,7 @@ FlyRuler 的协议内核与多语言绑定。飞行器状态通过 protobuf/UDP 
 just setup
 
 # 构建前端，然后启动独立管理服务器（同时托管 API 和 web/dist）
-just web-build
+just build-web
 just run-server
 
 # 浏览器打开 http://127.0.0.1:18003/
@@ -40,7 +40,7 @@ just dev-console          # 同时启动 Rust daemon + Vite 开发服务器
 然后启动一个 Python 示例发送端产生数据：
 
 ```bash
-just develop
+just build-python-dev
 cd bindings/python
 uv run python examples/demo_client.py
 ```
@@ -84,7 +84,7 @@ protontricks-launch --appid 2537590 \
 在另一终端中安装 Python 绑定并启动 MSFS 专用 demo：
 
 ```bash
-just develop
+just build-python-dev
 cd bindings/python
 uv run python examples/demo_msfs_client.py
 ```
@@ -129,10 +129,10 @@ just package-msfs
 
 ```bash
 # 先预览会改哪些文件
-just version 0.2.4 --dry-run
+just set-version 0.2.4 --dry-run
 
 # 正式更新；也支持 v0.2.4 写法
-just version 0.2.4
+just set-version 0.2.4
 ```
 
 脚本只修改项目自身版本，不会创建 commit、tag 或上传包。更新后建议执行：
@@ -148,9 +148,9 @@ cd ../../web && pnpm install --lockfile-only
 ```bash
 just test
 just check
-just web-check
+just check-web
 just run-msfs
-just demo-msfs
+just example-msfs
 ```
 
 - MSFS 桥接器详细说明、SDK 获取、Proton 配置、TOML 与日志配置：[`bindings/msfs/README.md`](bindings/msfs/README.md)

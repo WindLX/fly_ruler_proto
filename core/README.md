@@ -727,7 +727,7 @@ store.load_from_disk(Path::new("session_backup"))?;
 ```bash
 just check        # fmt + clippy
 just test         # Rust + Python 测试
-just test-rs      # cargo test --workspace
+just test-rust    # cargo test --workspace
 ```
 
 手动等价命令：
@@ -757,7 +757,7 @@ cargo test -p fly_ruler_proto_core
 ## 10. 相关文档
 
 - [Python 绑定](../bindings/python/README.md)
-- [项目总览](../AGENT.md)
+- [项目总览](../AGENTS.md)
 - [Protobuf Schema](../proto/fly_ruler.proto)
 - [Crate 内 Schema 镜像](proto/fly_ruler.proto)
 

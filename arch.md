@@ -142,7 +142,7 @@ Planned improvements:
 ### Phase 4: Test and Docs Hardening
 
 - Add config-focused tests and edge-case session tests.
-- Ensure `CLAUDE.md` and module docs remain synchronized.
+- Keep `AGENTS.md` short and synchronize architecture details in module docs.
 
 ## 7. Non-Goals (Current Iteration)
 
