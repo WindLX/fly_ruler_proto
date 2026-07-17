@@ -5,6 +5,128 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
+/// Current version of the shared runtime TOML schema.
+pub const RUNTIME_CONFIG_SCHEMA_VERSION: u32 = 1;
+
+/// Shared host-runtime sections persisted by bridge applications.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuntimeFileConfig {
+    /// TOML schema version.
+    pub schema_version: u32,
+    /// UDP transport settings.
+    pub transport: TransportFileConfig,
+    /// HTTP/WebSocket management settings.
+    pub management: ManagementFileConfig,
+    /// Playback limits.
+    pub playback: PlaybackFileConfig,
+    /// Logging settings.
+    pub logging: LoggingFileConfig,
+}
+
+impl Default for RuntimeFileConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: RUNTIME_CONFIG_SCHEMA_VERSION,
+            transport: TransportFileConfig::default(),
+            management: ManagementFileConfig::default(),
+            playback: PlaybackFileConfig::default(),
+            logging: LoggingFileConfig::default(),
+        }
+    }
+}
+
+/// Persisted UDP transport settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TransportFileConfig {
+    /// UDP bind address.
+    pub udp_listen: String,
+    /// Client heartbeat interval in seconds.
+    pub heartbeat_interval_secs: u64,
+    /// Server-side session timeout in seconds.
+    pub heartbeat_timeout_secs: u64,
+}
+
+impl Default for TransportFileConfig {
+    fn default() -> Self {
+        Self {
+            udp_listen: "127.0.0.1:18002".to_string(),
+            heartbeat_interval_secs: 5,
+            heartbeat_timeout_secs: 15,
+        }
+    }
+}
+
+/// Persisted management-server settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagementFileConfig {
+    /// Whether the management server is enabled.
+    pub enabled: bool,
+    /// HTTP bind address.
+    pub listen: String,
+    /// Session persistence root as a host-resolved path string.
+    pub data_root: String,
+    /// Web distribution root as a host-resolved path string.
+    pub web_root: String,
+    /// WebSocket snapshot publication rate.
+    pub websocket_hz: f64,
+}
+
+impl Default for ManagementFileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen: "127.0.0.1:18003".to_string(),
+            data_root: "sessions".to_string(),
+            web_root: "web/dist".to_string(),
+            websocket_hz: 30.0,
+        }
+    }
+}
+
+/// Persisted playback speed limits.
+/// Persisted logging settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlaybackFileConfig {
+    /// Minimum forward playback speed.
+    pub min_speed: f64,
+    /// Maximum forward playback speed.
+    pub max_speed: f64,
+}
+
+impl Default for PlaybackFileConfig {
+    fn default() -> Self {
+        Self {
+            min_speed: 0.1,
+            max_speed: 16.0,
+        }
+    }
+}
+
+/// Persisted logging settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoggingFileConfig {
+    /// Tracing level.
+    pub level: String,
+    /// Optional log file path; an empty string selects stderr.
+    pub file_path: String,
+}
+
+impl Default for LoggingFileConfig {
+    fn default() -> Self {
+        Self {
+            level: "warn".to_string(),
+            file_path: String::new(),
+        }
+    }
+}
+
 /// Transport/session-related runtime options.
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
@@ -125,4 +247,16 @@ pub struct RuntimeConfig {
     pub replay: ReplayConfig,
     /// Logging configuration.
     pub logging: LoggingConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagementFileConfig;
+
+    #[test]
+    fn management_file_defaults_use_host_relative_paths() {
+        let config = ManagementFileConfig::default();
+        assert_eq!(config.data_root, "sessions");
+        assert_eq!(config.web_root, "web/dist");
+    }
 }

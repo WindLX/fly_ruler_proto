@@ -12,8 +12,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -26,11 +24,11 @@ use crate::management::workspace::WorkspaceSnapshot;
 use crate::pb;
 use crate::playback::{PlaybackStepDirection, PlaybackStepUnit};
 use crate::store::{
-    active_time_bounds, aircraft_count_for, event_count_for, state_count_for, Event,
-    GlobalTimestampedEvent, TimeSeriesStore, TimestampedEvent, TimestampedState,
+    active_time_bounds, aircraft_count_for, event_count_for, state_count_for, telemetry_count_for,
+    Event, GlobalTimestampedEvent, TimeSeriesStore, TimestampedEvent, TimestampedState,
 };
 use crate::utils::now_secs;
-use crate::PROTOCOL_VERSION;
+use crate::{Attitude, PROTOCOL_VERSION};
 
 pub(crate) fn router(state: AppState) -> Router {
     Router::new()
@@ -120,6 +118,7 @@ async fn aircraft_list(State(state): State<AppState>) -> Json<Value> {
                 "time_range": summary.time_range,
                 "state_count": summary.state_count,
                 "event_count": summary.event_count,
+                "telemetry_count": summary.telemetry_count,
                 "spawned_at_cursor": cursor.is_some_and(|cursor| state.store.is_spawned_at(&summary.id, cursor)),
             })
         })
@@ -695,6 +694,7 @@ fn store_stats_json(state: &AppState) -> Value {
         "aircraft_count": aircraft_count_for(&state.store),
         "state_count": state_count_for(&state.store),
         "event_count": event_count_for(&state.store),
+        "telemetry_count": telemetry_count_for(&state.store),
         "time_bounds": active_time_bounds(&state.store),
     })
 }
@@ -714,6 +714,7 @@ fn timestamped_event_json(event: &TimestampedEvent) -> Value {
             "name": spawn.name,
             "toml_config": spawn.toml_config,
             "initial_state": spawn.initial_state.as_ref().map(aircraft_state_json),
+            "telemetry_schemas": telemetry_schemas_json(&spawn.telemetry_schemas),
         }),
         Event::Despawn(despawn) => json!({
             "timestamp_secs": event.timestamp_secs,
@@ -743,37 +744,22 @@ fn global_event_json(event: &GlobalTimestampedEvent) -> Value {
 }
 
 fn aircraft_state_json(state: &pb::AircraftState) -> Value {
-    let custom_fields = state
-        .custom_fields
-        .iter()
-        .filter_map(|field| {
-            let kind = field.value.as_ref()?.kind.as_ref()?;
-            let value = match kind {
-                pb::field_value::Kind::F64Value(value) => {
-                    json!({"kind": "f64", "value": value})
-                }
-                pb::field_value::Kind::I64Value(value) => {
-                    json!({"kind": "i64", "value": value})
-                }
-                pb::field_value::Kind::BoolValue(value) => {
-                    json!({"kind": "bool", "value": value})
-                }
-                pb::field_value::Kind::StringValue(value) => {
-                    json!({"kind": "string", "value": value})
-                }
-                pb::field_value::Kind::BytesValue(value) => {
-                    json!({"kind": "bytes", "value": BASE64.encode(value)})
-                }
-            };
-            Some((field.field_id.clone(), value))
+    let attitude = state.attitude.as_ref().map(|value| {
+        let euler = Attitude::try_from(value).ok().map(|value| value.euler());
+        json!({
+            "w": value.w,
+            "x": value.x,
+            "y": value.y,
+            "z": value.z,
+            "roll": euler.map(|value| value[0]),
+            "pitch": euler.map(|value| value[1]),
+            "yaw": euler.map(|value| value[2]),
         })
-        .collect::<Map<_, _>>();
+    });
     json!({
         "position": state.position.as_ref().map(vector_json),
         "velocity": state.velocity.as_ref().map(vector_json),
-        "attitude": state.attitude.as_ref().map(|value| json!({
-            "w": value.w, "x": value.x, "y": value.y, "z": value.z,
-        })),
+        "attitude": attitude,
         "angular_velocity": state.angular_velocity.as_ref().map(vector_json),
         "derived": state.derived.as_ref().map(|value| json!({
             "lat": value.lat,
@@ -788,6 +774,10 @@ fn aircraft_state_json(state: &pb::AircraftState) -> Value {
             "ias": value.ias,
             "cas": value.cas,
             "mach": value.mach,
+            "ground_speed": value.ground_speed,
+            "vertical_speed": value.vertical_speed,
+            "dynamic_pressure": value.dynamic_pressure,
+            "normal_load_factor": value.normal_load_factor,
         })),
         "control_surfaces": state.control_surfaces.as_ref().map(|value| json!({
             "aileron_left_rad": value.aileron_left_rad,
@@ -798,16 +788,41 @@ fn aircraft_state_json(state: &pb::AircraftState) -> Value {
             "flaps_right_ratio": value.flaps_right_ratio,
             "spoilers_ratio": value.spoilers_ratio,
         })),
-        "engines": state.engines.iter().map(|value| json!({
+        "linear_acceleration_body": state.linear_acceleration_body.as_ref().map(vector_json),
+        "propulsors": state.propulsors.iter().map(|value| json!({
+            "propulsor_id": value.propulsor_id,
+            "kind": value.kind,
+            "throttle_ratio": value.throttle_ratio,
+            "rpm": value.rpm,
+            "blade_pitch_rad": value.blade_pitch_rad,
+            "thrust_newton": value.thrust_newton,
+            "torque_newton_meter": value.torque_newton_meter,
             "index": value.index,
-            "throttle_lever_ratio": value.throttle_lever_ratio,
         })).collect::<Vec<_>>(),
-        "custom_fields": custom_fields,
     })
 }
 
 fn vector_json(value: &pb::Vector3) -> Value {
     json!({"x": value.x, "y": value.y, "z": value.z})
+}
+
+fn telemetry_schemas_json(schemas: &[pb::TelemetryStreamSchema]) -> Value {
+    json!(schemas
+        .iter()
+        .map(|schema| json!({
+            "stream_id": schema.stream_id,
+            "name": schema.name,
+            "nominal_rate_hz": schema.nominal_rate_hz,
+            "fields": schema.fields.iter().map(|field| json!({
+                "field_id": field.field_id,
+                "label": field.label,
+                "group": field.group,
+                "unit": field.unit,
+                "description": field.description,
+                "value_type": field.value_type,
+            })).collect::<Vec<_>>(),
+        }))
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

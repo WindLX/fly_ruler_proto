@@ -2,13 +2,29 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::pb;
 use crate::store::{AircraftId, TimeSeriesStore};
+use crate::{pb, Attitude};
 
 const DEFAULT_MAX_POINTS: usize = 2_000;
 const MIN_MAX_POINTS: usize = 100;
 const MAX_MAX_POINTS: usize = 20_000;
 const MAX_SELECTIONS: usize = 64;
+
+/// Numeric field available from a standard propulsor state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropulsorField {
+    /// Normalized throttle ratio.
+    ThrottleRatio,
+    /// Rotational speed in revolutions per minute.
+    Rpm,
+    /// Blade pitch in radians.
+    BladePitchRad,
+    /// Thrust in newtons.
+    ThrustNewton,
+    /// Torque in newton-meters.
+    TorqueNewtonMeter,
+}
 
 /// Selector identifying a single time-series source for an aircraft.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -19,14 +35,18 @@ pub enum SeriesSelector {
         /// Dot-separated path like `derived.altitude`.
         path: String,
     },
-    /// Throttle lever ratio for the engine at the given index.
-    EngineThrottle {
-        /// Engine index starting at 1.
-        index: u32,
+    /// A standard numeric field from one stable propulsor identifier.
+    Propulsor {
+        /// Stable propulsor identifier declared by the state producer.
+        propulsor_id: String,
+        /// Numeric propulsor field.
+        field: PropulsorField,
     },
-    /// A user-defined numeric custom field.
-    Custom {
-        /// User-defined field identifier.
+    /// A schema-registered telemetry field.
+    Telemetry {
+        /// Stream identifier registered at spawn.
+        stream_id: String,
+        /// Scalar field identifier within the stream.
         field_id: String,
     },
 }
@@ -36,8 +56,46 @@ impl SeriesSelector {
     pub fn key(&self) -> String {
         match self {
             Self::Standard { path } => format!("standard:{path}"),
-            Self::EngineThrottle { index } => format!("engine_throttle:{index}"),
-            Self::Custom { field_id } => format!("custom:{field_id}"),
+            Self::Propulsor {
+                propulsor_id,
+                field,
+            } => format!("propulsor:{propulsor_id}:{}", field.key()),
+            Self::Telemetry {
+                stream_id,
+                field_id,
+            } => format!("telemetry:{stream_id}:{field_id}"),
+        }
+    }
+}
+
+impl PropulsorField {
+    fn key(self) -> &'static str {
+        match self {
+            Self::ThrottleRatio => "throttle_ratio",
+            Self::Rpm => "rpm",
+            Self::BladePitchRad => "blade_pitch_rad",
+            Self::ThrustNewton => "thrust_newton",
+            Self::TorqueNewtonMeter => "torque_newton_meter",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ThrottleRatio => "Throttle",
+            Self::Rpm => "RPM",
+            Self::BladePitchRad => "Blade pitch",
+            Self::ThrustNewton => "Thrust",
+            Self::TorqueNewtonMeter => "Torque",
+        }
+    }
+
+    fn unit(self) -> &'static str {
+        match self {
+            Self::ThrottleRatio => "ratio",
+            Self::Rpm => "rpm",
+            Self::BladePitchRad => "rad",
+            Self::ThrustNewton => "N",
+            Self::TorqueNewtonMeter => "N·m",
         }
     }
 }
@@ -144,6 +202,9 @@ pub enum SeriesError {
     /// A standard field path is not recognized.
     #[error("unknown standard field: {0}")]
     UnknownStandardField(String),
+    /// A telemetry selector is not present in the registered schema.
+    #[error("unknown telemetry field: {0}:{1}")]
+    UnknownTelemetryField(String, String),
 }
 
 /// Build the catalog of selectable series for an aircraft.
@@ -161,7 +222,44 @@ pub fn catalog(
     if found.is_none() {
         return Err(SeriesError::AircraftNotFound(aircraft_id.to_string()));
     }
-    Ok(selectors.into_iter().map(catalog_item).collect())
+    let schemas = store.get_telemetry_schemas(&id).unwrap_or_default();
+    for schema in &schemas {
+        for field in &schema.fields {
+            selectors.insert(SeriesSelector::Telemetry {
+                stream_id: schema.stream_id.clone(),
+                field_id: field.field_id.clone(),
+            });
+        }
+    }
+    Ok(selectors
+        .into_iter()
+        .map(|selector| {
+            if let SeriesSelector::Telemetry {
+                stream_id,
+                field_id,
+            } = &selector
+            {
+                let (schema, index) = telemetry_field(&schemas, stream_id, field_id)
+                    .expect("telemetry selector comes from the registered schema");
+                let field = &schema.fields[index];
+                return SeriesCatalogItem {
+                    selector,
+                    group: if field.group.is_empty() {
+                        schema.name.clone()
+                    } else {
+                        field.group.clone()
+                    },
+                    label: if field.label.is_empty() {
+                        field.field_id.clone()
+                    } else {
+                        field.label.clone()
+                    },
+                    unit: (!field.unit.is_empty()).then(|| field.unit.clone()),
+                };
+            }
+            catalog_item(selector)
+        })
+        .collect())
 }
 
 /// Query sampled series data for the selections in `request`.
@@ -212,6 +310,51 @@ pub fn query(
         if found.is_none() {
             return Err(SeriesError::AircraftNotFound(aircraft_id));
         }
+        let schemas = store
+            .get_telemetry_schemas(&aircraft_id)
+            .ok_or_else(|| SeriesError::AircraftNotFound(aircraft_id.clone()))?;
+        for (_, selector) in &selections {
+            if let SeriesSelector::Telemetry {
+                stream_id,
+                field_id,
+            } = selector
+            {
+                telemetry_field(&schemas, stream_id, field_id).ok_or_else(|| {
+                    SeriesError::UnknownTelemetryField(stream_id.clone(), field_id.clone())
+                })?;
+            }
+        }
+        store.visit_telemetry_range(&aircraft_id, start, end, |frames| {
+            for (slot, (_, selector)) in selections.iter().enumerate() {
+                let SeriesSelector::Telemetry {
+                    stream_id,
+                    field_id,
+                } = selector
+                else {
+                    continue;
+                };
+                let Some((schema, field_index)) = telemetry_field(&schemas, stream_id, field_id)
+                else {
+                    continue;
+                };
+                for sample in frames {
+                    if sample.frame.stream_id != schema.stream_id {
+                        continue;
+                    }
+                    let Some(value) = sample
+                        .frame
+                        .values
+                        .get(field_index)
+                        .and_then(telemetry_numeric)
+                    else {
+                        continue;
+                    };
+                    if sample.timestamp_secs.is_finite() && value.is_finite() {
+                        points[slot].push([sample.timestamp_secs, value]);
+                    }
+                }
+            }
+        });
         for (slot, (output_index, selector)) in selections.into_iter().enumerate() {
             let full = &points[slot];
             let stats = stats(full);
@@ -250,6 +393,9 @@ fn standard_fields() -> &'static [(
         ("attitude.x", "attitude", "Quaternion X", None),
         ("attitude.y", "attitude", "Quaternion Y", None),
         ("attitude.z", "attitude", "Quaternion Z", None),
+        ("attitude.roll", "attitude", "Roll", Some("rad")),
+        ("attitude.pitch", "attitude", "Pitch", Some("rad")),
+        ("attitude.yaw", "attitude", "Yaw", Some("rad")),
         (
             "angular_velocity.x",
             "angular_velocity",
@@ -280,6 +426,48 @@ fn standard_fields() -> &'static [(
         ("derived.ias", "derived", "Indicated airspeed", Some("m/s")),
         ("derived.cas", "derived", "Calibrated airspeed", Some("m/s")),
         ("derived.mach", "derived", "Mach", None),
+        (
+            "derived.ground_speed",
+            "derived",
+            "Ground speed",
+            Some("m/s"),
+        ),
+        (
+            "derived.vertical_speed",
+            "derived",
+            "Vertical speed",
+            Some("m/s"),
+        ),
+        (
+            "derived.dynamic_pressure",
+            "derived",
+            "Dynamic pressure",
+            Some("Pa"),
+        ),
+        (
+            "derived.normal_load_factor",
+            "derived",
+            "Normal load factor",
+            Some("g"),
+        ),
+        (
+            "linear_acceleration_body.x",
+            "acceleration",
+            "Body acceleration X",
+            Some("m/s²"),
+        ),
+        (
+            "linear_acceleration_body.y",
+            "acceleration",
+            "Body acceleration Y",
+            Some("m/s²"),
+        ),
+        (
+            "linear_acceleration_body.z",
+            "acceleration",
+            "Body acceleration Z",
+            Some("m/s²"),
+        ),
         (
             "control_surfaces.aileron_left_rad",
             "control_surfaces",
@@ -334,18 +522,20 @@ fn collect_state_selectors(state: &pb::AircraftState, output: &mut BTreeSet<Seri
             output.insert(selector);
         }
     }
-    for engine in &state.engines {
-        if engine.throttle_lever_ratio.is_some() {
-            output.insert(SeriesSelector::EngineThrottle {
-                index: engine.index,
-            });
-        }
-    }
-    for field in &state.custom_fields {
-        if custom_numeric(field).is_some() {
-            output.insert(SeriesSelector::Custom {
-                field_id: field.field_id.clone(),
-            });
+    for propulsor in &state.propulsors {
+        for field in [
+            PropulsorField::ThrottleRatio,
+            PropulsorField::Rpm,
+            PropulsorField::BladePitchRad,
+            PropulsorField::ThrustNewton,
+            PropulsorField::TorqueNewtonMeter,
+        ] {
+            if propulsor_value(propulsor, field).is_some() {
+                output.insert(SeriesSelector::Propulsor {
+                    propulsor_id: propulsor.propulsor_id.clone(),
+                    field,
+                });
+            }
         }
     }
 }
@@ -364,15 +554,21 @@ fn catalog_item(selector: SeriesSelector) -> SeriesCatalogItem {
                 unit: unit.map(str::to_string),
             }
         }
-        SeriesSelector::EngineThrottle { index } => SeriesCatalogItem {
+        SeriesSelector::Propulsor {
+            propulsor_id,
+            field,
+        } => SeriesCatalogItem {
             selector: selector.clone(),
-            group: "engines".to_string(),
-            label: format!("Engine {index} throttle"),
-            unit: Some("ratio".to_string()),
+            group: "propulsors".to_string(),
+            label: format!("{propulsor_id} {}", field.label()),
+            unit: Some(field.unit().to_string()),
         },
-        SeriesSelector::Custom { field_id } => SeriesCatalogItem {
+        SeriesSelector::Telemetry {
+            stream_id,
+            field_id,
+        } => SeriesCatalogItem {
             selector: selector.clone(),
-            group: "custom".to_string(),
+            group: stream_id.clone(),
             label: field_id.clone(),
             unit: None,
         },
@@ -394,20 +590,39 @@ fn validate_selector(selector: &SeriesSelector) -> Result<(), SeriesError> {
 fn extract_value(state: &pb::AircraftState, selector: &SeriesSelector) -> Option<f64> {
     match selector {
         SeriesSelector::Standard { path } => standard_value(state, path),
-        SeriesSelector::EngineThrottle { index } => {
-            state
-                .engines
-                .iter()
-                .rev()
-                .find(|engine| engine.index == *index)?
-                .throttle_lever_ratio
-        }
-        SeriesSelector::Custom { field_id } => state
-            .custom_fields
+        SeriesSelector::Propulsor {
+            propulsor_id,
+            field,
+        } => state
+            .propulsors
             .iter()
             .rev()
-            .find(|field| field.field_id == *field_id)
-            .and_then(custom_numeric),
+            .find(|propulsor| propulsor.propulsor_id == *propulsor_id)
+            .and_then(|propulsor| propulsor_value(propulsor, *field)),
+        SeriesSelector::Telemetry { .. } => None,
+    }
+}
+
+fn telemetry_field<'a>(
+    schemas: &'a [pb::TelemetryStreamSchema],
+    stream_id: &str,
+    field_id: &str,
+) -> Option<(&'a pb::TelemetryStreamSchema, usize)> {
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.stream_id == stream_id)?;
+    let index = schema
+        .fields
+        .iter()
+        .position(|field| field.field_id == field_id)?;
+    Some((schema, index))
+}
+
+fn telemetry_numeric(value: &pb::TelemetryValue) -> Option<f64> {
+    match value.kind.as_ref()? {
+        pb::telemetry_value::Kind::F64Value(value) => Some(*value),
+        pb::telemetry_value::Kind::I64Value(value) => Some(*value as f64),
+        pb::telemetry_value::Kind::BoolValue(value) => Some(u8::from(*value) as f64),
     }
 }
 
@@ -423,6 +638,15 @@ fn standard_value(state: &pb::AircraftState, path: &str) -> Option<f64> {
         "attitude.x" => state.attitude.as_ref().map(|value| value.x),
         "attitude.y" => state.attitude.as_ref().map(|value| value.y),
         "attitude.z" => state.attitude.as_ref().map(|value| value.z),
+        "attitude.roll" => Attitude::try_from(state.attitude.as_ref()?)
+            .ok()
+            .map(|value| value.euler()[0]),
+        "attitude.pitch" => Attitude::try_from(state.attitude.as_ref()?)
+            .ok()
+            .map(|value| value.euler()[1]),
+        "attitude.yaw" => Attitude::try_from(state.attitude.as_ref()?)
+            .ok()
+            .map(|value| value.euler()[2]),
         "angular_velocity.x" => state.angular_velocity.as_ref().map(|value| value.x),
         "angular_velocity.y" => state.angular_velocity.as_ref().map(|value| value.y),
         "angular_velocity.z" => state.angular_velocity.as_ref().map(|value| value.z),
@@ -438,6 +662,19 @@ fn standard_value(state: &pb::AircraftState, path: &str) -> Option<f64> {
         "derived.ias" => state.derived.as_ref()?.ias,
         "derived.cas" => state.derived.as_ref()?.cas,
         "derived.mach" => state.derived.as_ref()?.mach,
+        "derived.ground_speed" => state.derived.as_ref()?.ground_speed,
+        "derived.vertical_speed" => state.derived.as_ref()?.vertical_speed,
+        "derived.dynamic_pressure" => state.derived.as_ref()?.dynamic_pressure,
+        "derived.normal_load_factor" => state.derived.as_ref()?.normal_load_factor,
+        "linear_acceleration_body.x" => {
+            state.linear_acceleration_body.as_ref().map(|value| value.x)
+        }
+        "linear_acceleration_body.y" => {
+            state.linear_acceleration_body.as_ref().map(|value| value.y)
+        }
+        "linear_acceleration_body.z" => {
+            state.linear_acceleration_body.as_ref().map(|value| value.z)
+        }
         "control_surfaces.aileron_left_rad" => state.control_surfaces.as_ref()?.aileron_left_rad,
         "control_surfaces.aileron_right_rad" => state.control_surfaces.as_ref()?.aileron_right_rad,
         "control_surfaces.elevator_rad" => state.control_surfaces.as_ref()?.elevator_rad,
@@ -449,12 +686,13 @@ fn standard_value(state: &pb::AircraftState, path: &str) -> Option<f64> {
     }
 }
 
-fn custom_numeric(field: &pb::CustomField) -> Option<f64> {
-    match field.value.as_ref()?.kind.as_ref()? {
-        pb::field_value::Kind::F64Value(value) => Some(*value),
-        pb::field_value::Kind::I64Value(value) => Some(*value as f64),
-        pb::field_value::Kind::BoolValue(value) => Some(u8::from(*value) as f64),
-        pb::field_value::Kind::StringValue(_) | pb::field_value::Kind::BytesValue(_) => None,
+fn propulsor_value(propulsor: &pb::PropulsorState, field: PropulsorField) -> Option<f64> {
+    match field {
+        PropulsorField::ThrottleRatio => propulsor.throttle_ratio,
+        PropulsorField::Rpm => propulsor.rpm,
+        PropulsorField::BladePitchRad => propulsor.blade_pitch_rad,
+        PropulsorField::ThrustNewton => propulsor.thrust_newton,
+        PropulsorField::TorqueNewtonMeter => propulsor.torque_newton_meter,
     }
 }
 
@@ -525,15 +763,6 @@ fn lttb(points: &[[f64; 2]], threshold: usize) -> Vec<[f64; 2]> {
 mod tests {
     use super::*;
 
-    fn numeric_custom(field_id: &str, value: f64) -> pb::CustomField {
-        pb::CustomField {
-            field_id: field_id.to_string(),
-            value: Some(pb::FieldValue {
-                kind: Some(pb::field_value::Kind::F64Value(value)),
-            }),
-        }
-    }
-
     #[test]
     fn lttb_respects_limit_and_endpoints() {
         let points = (0..1_000)
@@ -546,7 +775,94 @@ mod tests {
     }
 
     #[test]
-    fn catalog_and_query_cover_standard_engine_and_custom_fields() {
+    fn removed_engine_and_custom_selectors_are_rejected() {
+        for selector in [
+            serde_json::json!({"kind": "engine_throttle", "index": 1}),
+            serde_json::json!({"kind": "custom", "field_id": "legacy"}),
+        ] {
+            assert!(serde_json::from_value::<SeriesSelector>(selector).is_err());
+        }
+    }
+
+    #[test]
+    fn telemetry_catalog_exists_before_samples_and_query_keeps_all_frames() {
+        let store = TimeSeriesStore::new();
+        store.append_state("aircraft".to_string(), 0.0, pb::AircraftState::default());
+        store.append_event(
+            "aircraft".to_string(),
+            0.0,
+            crate::store::Event::Spawn(Box::new(pb::AircraftSpawnInfo {
+                name: "test".to_string(),
+                toml_config: String::new(),
+                initial_state: None,
+                telemetry_schemas: vec![pb::TelemetryStreamSchema {
+                    stream_id: "controller".to_string(),
+                    name: "Controller".to_string(),
+                    nominal_rate_hz: Some(100.0),
+                    fields: vec![pb::TelemetryField {
+                        field_id: "controller.pitch.error".to_string(),
+                        label: "Pitch error".to_string(),
+                        group: "Pitch".to_string(),
+                        unit: "rad".to_string(),
+                        description: String::new(),
+                        value_type: pb::TelemetryValueType::F64 as i32,
+                    }],
+                }],
+            })),
+        );
+
+        let catalog = catalog(&store, "aircraft").unwrap();
+        let telemetry = catalog
+            .iter()
+            .find(|item| matches!(item.selector, SeriesSelector::Telemetry { .. }))
+            .unwrap();
+        assert_eq!(telemetry.label, "Pitch error");
+        assert_eq!(telemetry.unit.as_deref(), Some("rad"));
+
+        let selection = SeriesSelection {
+            aircraft_id: "aircraft".to_string(),
+            selector: telemetry.selector.clone(),
+        };
+        let empty = query(
+            &store,
+            SeriesQueryRequest {
+                selections: vec![selection.clone()],
+                time_range: None,
+                max_points: Some(100),
+            },
+        )
+        .unwrap();
+        assert!(empty.series[0].points.is_empty());
+
+        for (sequence, value) in [(1, 0.25), (2, -0.5)] {
+            store
+                .append_telemetry(
+                    "aircraft".to_string(),
+                    sequence as f64,
+                    pb::TelemetryFrame {
+                        stream_id: "controller".to_string(),
+                        sequence,
+                        values: vec![pb::TelemetryValue {
+                            kind: Some(pb::telemetry_value::Kind::F64Value(value)),
+                        }],
+                    },
+                )
+                .unwrap();
+        }
+        let response = query(
+            &store,
+            SeriesQueryRequest {
+                selections: vec![selection],
+                time_range: None,
+                max_points: Some(100),
+            },
+        )
+        .unwrap();
+        assert_eq!(response.series[0].points, vec![[1.0, 0.25], [2.0, -0.5]]);
+    }
+
+    #[test]
+    fn catalog_and_query_cover_standard_and_propulsor_fields() {
         let store = TimeSeriesStore::new();
         for index in 0..250 {
             store.append_state(
@@ -558,14 +874,19 @@ mod tests {
                         y: f64::NAN,
                         z: 0.0,
                     }),
-                    engines: vec![pb::EngineState {
-                        index: 2,
-                        throttle_lever_ratio: Some(index as f64 / 250.0),
+                    attitude: Some(pb::Quaternion::from(
+                        &Attitude::from_euler([index as f64 / 100.0, 0.0, 0.0]).unwrap(),
+                    )),
+                    propulsors: vec![pb::PropulsorState {
+                        propulsor_id: "engine.left".to_string(),
+                        throttle_ratio: Some(index as f64 / 250.0),
+                        rpm: Some(index as f64 * 100.0),
+                        blade_pitch_rad: Some(index as f64 / 1_000.0),
+                        thrust_newton: Some(index as f64 * 10.0),
+                        torque_newton_meter: Some(index as f64),
+                        index: Some(1),
+                        ..Default::default()
                     }],
-                    custom_fields: vec![numeric_custom(
-                        "controller.cost.total",
-                        index as f64 * 2.0,
-                    )],
                     ..Default::default()
                 },
             );
@@ -586,13 +907,31 @@ mod tests {
         let fields = catalog(&store, "alpha").unwrap();
         assert!(fields.iter().any(|item| {
             item.selector
-                == SeriesSelector::Custom {
-                    field_id: "controller.cost.total".to_string(),
+                == SeriesSelector::Propulsor {
+                    propulsor_id: "engine.left".to_string(),
+                    field: PropulsorField::ThrottleRatio,
                 }
         }));
-        assert!(fields
-            .iter()
-            .any(|item| { item.selector == SeriesSelector::EngineThrottle { index: 2 } }));
+        for field in [
+            PropulsorField::Rpm,
+            PropulsorField::BladePitchRad,
+            PropulsorField::ThrustNewton,
+            PropulsorField::TorqueNewtonMeter,
+        ] {
+            assert!(fields.iter().any(|item| {
+                item.selector
+                    == SeriesSelector::Propulsor {
+                        propulsor_id: "engine.left".to_string(),
+                        field,
+                    }
+            }));
+        }
+        assert!(fields.iter().any(|item| {
+            item.selector
+                == SeriesSelector::Standard {
+                    path: "attitude.roll".to_string(),
+                }
+        }));
 
         let response = query(
             &store,
@@ -610,6 +949,19 @@ mod tests {
                             path: "position.y".to_string(),
                         },
                     },
+                    SeriesSelection {
+                        aircraft_id: "alpha".to_string(),
+                        selector: SeriesSelector::Propulsor {
+                            propulsor_id: "engine.left".to_string(),
+                            field: PropulsorField::ThrottleRatio,
+                        },
+                    },
+                    SeriesSelection {
+                        aircraft_id: "alpha".to_string(),
+                        selector: SeriesSelector::Standard {
+                            path: "attitude.roll".to_string(),
+                        },
+                    },
                 ],
                 time_range: Some(SeriesTimeRange {
                     start: 10.0,
@@ -623,5 +975,8 @@ mod tests {
         assert_eq!(response.series[0].returned_points, 100);
         assert_eq!(response.series[0].stats.as_ref().unwrap().max, 240.0);
         assert!(response.series[1].points.is_empty());
+        assert_eq!(response.series[2].total_points, 231);
+        assert!((response.series[2].stats.as_ref().unwrap().max - 0.96).abs() < 1e-12);
+        assert!((response.series[3].stats.as_ref().unwrap().max - 2.4).abs() < 1e-12);
     }
 }

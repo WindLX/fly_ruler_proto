@@ -2,6 +2,8 @@
 
 set fallback
 
+export GODOT4_BIN := env_var_or_default("GODOT4_BIN", "/usr/bin/godot-mono")
+
 _default:
     @just --list
 

@@ -5,13 +5,12 @@ edition.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
-# Rust unit tests are disabled for GDExtension crates; the binding is exercised
-# from the Godot editor/runtime instead.
-test = false
 doctest = false
 
 [dependencies]
 fly_ruler_proto_core = { path = "../../core" }
 tokio.workspace = true
 tracing.workspace = true
-godot = "0.5.0"
+godot = { version = "0.5.4", features = ["custom-godot"] }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.8"

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use fly_ruler_proto_core::pb;
+use fly_ruler_proto_core::{pb, Attitude};
 
 /// Fixed bridge-side live smoothing presets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,6 +362,11 @@ fn interpolate_state(
         right.state.angular_velocity.as_ref(),
         t,
     );
+    state.linear_acceleration_body = interpolate_vector(
+        left.state.linear_acceleration_body.as_ref(),
+        right.state.linear_acceleration_body.as_ref(),
+        t,
+    );
     state.attitude = interpolate_quaternion(
         left.state.attitude.as_ref(),
         right.state.attitude.as_ref(),
@@ -374,9 +379,7 @@ fn interpolate_state(
         right.state.control_surfaces.as_ref(),
         t,
     );
-    state.engines = interpolate_engines(&left.state.engines, &right.state.engines, t);
-    state.custom_fields =
-        interpolate_custom_fields(&left.state.custom_fields, &right.state.custom_fields, t);
+    state.propulsors = interpolate_propulsors(&left.state.propulsors, &right.state.propulsors, t);
     state
 }
 
@@ -405,9 +408,10 @@ fn interpolate_quaternion(
     t: f64,
 ) -> Option<pb::Quaternion> {
     match (left, right) {
-        (Some(left), Some(right)) if finite_quaternion(left) && finite_quaternion(right) => {
-            Some(slerp(*left, *right, t))
-        }
+        (Some(left), Some(right)) => match (Attitude::try_from(left), Attitude::try_from(right)) {
+            (Ok(left), Ok(right)) => Some(pb::Quaternion::from(&left.slerp(&right, t))),
+            _ => Some(*right),
+        },
         (_, Some(right)) => Some(*right),
         (Some(left), None) => Some(*left),
         (None, None) => None,
@@ -433,6 +437,14 @@ fn interpolate_derived(
             ias: interpolate_option(left.ias, right.ias, t),
             cas: interpolate_option(left.cas, right.cas, t),
             mach: interpolate_option(left.mach, right.mach, t),
+            ground_speed: interpolate_option(left.ground_speed, right.ground_speed, t),
+            vertical_speed: interpolate_option(left.vertical_speed, right.vertical_speed, t),
+            dynamic_pressure: interpolate_option(left.dynamic_pressure, right.dynamic_pressure, t),
+            normal_load_factor: interpolate_option(
+                left.normal_load_factor,
+                right.normal_load_factor,
+                t,
+            ),
         }),
         (_, Some(right)) => Some(*right),
         (Some(left), None) => Some(*left),
@@ -469,90 +481,53 @@ fn interpolate_controls(
     }
 }
 
-fn interpolate_engines(
-    left: &[pb::EngineState],
-    right: &[pb::EngineState],
+fn interpolate_propulsors(
+    left: &[pb::PropulsorState],
+    right: &[pb::PropulsorState],
     t: f64,
-) -> Vec<pb::EngineState> {
-    let mut engines = right.to_vec();
-    for index in 1..=4 {
-        let left_value = left
+) -> Vec<pb::PropulsorState> {
+    let mut propulsors = right.to_vec();
+    for left_propulsor in left {
+        let Some(right_propulsor) = right
             .iter()
-            .find(|engine| engine.index == index)
-            .and_then(|engine| engine.throttle_lever_ratio);
-        let right_value = right
-            .iter()
-            .find(|engine| engine.index == index)
-            .and_then(|engine| engine.throttle_lever_ratio);
-        let value = interpolate_option(left_value, right_value, t);
-        let Some(value) = value else {
+            .find(|candidate| candidate.propulsor_id == left_propulsor.propulsor_id)
+        else {
+            if !propulsors
+                .iter()
+                .any(|candidate| candidate.propulsor_id == left_propulsor.propulsor_id)
+            {
+                propulsors.push(left_propulsor.clone());
+            }
             continue;
         };
-        if let Some(engine) = engines.iter_mut().find(|engine| engine.index == index) {
-            engine.throttle_lever_ratio = Some(value);
-        } else {
-            engines.push(pb::EngineState {
-                index,
-                throttle_lever_ratio: Some(value),
-            });
-        }
+        let propulsor = propulsors
+            .iter_mut()
+            .find(|candidate| candidate.propulsor_id == left_propulsor.propulsor_id)
+            .expect("matching right propulsor is present");
+        propulsor.throttle_ratio = interpolate_option(
+            left_propulsor.throttle_ratio,
+            right_propulsor.throttle_ratio,
+            t,
+        );
+        propulsor.rpm = interpolate_option(left_propulsor.rpm, right_propulsor.rpm, t);
+        propulsor.blade_pitch_rad = interpolate_option(
+            left_propulsor.blade_pitch_rad,
+            right_propulsor.blade_pitch_rad,
+            t,
+        );
+        propulsor.thrust_newton = interpolate_option(
+            left_propulsor.thrust_newton,
+            right_propulsor.thrust_newton,
+            t,
+        );
+        propulsor.torque_newton_meter = interpolate_option(
+            left_propulsor.torque_newton_meter,
+            right_propulsor.torque_newton_meter,
+            t,
+        );
     }
-    engines.sort_by_key(|engine| engine.index);
-    engines
-}
-
-fn interpolate_custom_fields(
-    left: &[pb::CustomField],
-    right: &[pb::CustomField],
-    t: f64,
-) -> Vec<pb::CustomField> {
-    let mut fields = right.to_vec();
-    for field_id in [
-        crate::fields::AILERON_LEFT,
-        crate::fields::AILERON_RIGHT,
-        crate::fields::ELEVATOR,
-        crate::fields::RUDDER,
-        crate::fields::FLAPS_LEFT,
-        crate::fields::FLAPS_RIGHT,
-        crate::fields::SPOILERS,
-    ] {
-        let left_value = left.iter().find_map(|field| {
-            (field.field_id == field_id)
-                .then(|| field_f64(field))
-                .flatten()
-        });
-        let right_value = right.iter().find_map(|field| {
-            (field.field_id == field_id)
-                .then(|| field_f64(field))
-                .flatten()
-        });
-        let Some(value) = interpolate_option(left_value, right_value, t) else {
-            continue;
-        };
-        if let Some(field) = fields.iter_mut().find(|field| field.field_id == field_id) {
-            field.value = Some(f64_field_value(value));
-        } else {
-            fields.push(pb::CustomField {
-                field_id: field_id.to_owned(),
-                value: Some(f64_field_value(value)),
-            });
-        }
-    }
-    fields
-}
-
-fn field_f64(field: &pb::CustomField) -> Option<f64> {
-    match field.value.as_ref()?.kind.as_ref()? {
-        pb::field_value::Kind::F64Value(value) if value.is_finite() => Some(*value),
-        pb::field_value::Kind::I64Value(value) => Some(*value as f64),
-        _ => None,
-    }
-}
-
-fn f64_field_value(value: f64) -> pb::FieldValue {
-    pb::FieldValue {
-        kind: Some(pb::field_value::Kind::F64Value(value)),
-    }
+    propulsors.sort_by(|left, right| left.propulsor_id.cmp(&right.propulsor_id));
+    propulsors
 }
 
 fn interpolate_option(left: Option<f64>, right: Option<f64>, t: f64) -> Option<f64> {
@@ -583,58 +558,6 @@ fn lerp(left: f64, right: f64, t: f64) -> f64 {
 
 fn finite_vector(value: &pb::Vector3) -> bool {
     value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
-}
-
-fn finite_quaternion(value: &pb::Quaternion) -> bool {
-    value.w.is_finite() && value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
-}
-
-fn slerp(mut left: pb::Quaternion, mut right: pb::Quaternion, t: f64) -> pb::Quaternion {
-    normalize_quaternion(&mut left);
-    normalize_quaternion(&mut right);
-    let mut dot = left.w * right.w + left.x * right.x + left.y * right.y + left.z * right.z;
-    if dot < 0.0 {
-        right.w = -right.w;
-        right.x = -right.x;
-        right.y = -right.y;
-        right.z = -right.z;
-        dot = -dot;
-    }
-
-    let mut out = if dot > 0.9995 {
-        pb::Quaternion {
-            w: lerp(left.w, right.w, t),
-            x: lerp(left.x, right.x, t),
-            y: lerp(left.y, right.y, t),
-            z: lerp(left.z, right.z, t),
-        }
-    } else {
-        let theta_0 = dot.clamp(-1.0, 1.0).acos();
-        let sin_theta_0 = theta_0.sin();
-        let theta = theta_0 * t;
-        let sin_theta = theta.sin();
-        let scale_left = (theta_0 - theta).sin() / sin_theta_0;
-        let scale_right = sin_theta / sin_theta_0;
-        pb::Quaternion {
-            w: scale_left * left.w + scale_right * right.w,
-            x: scale_left * left.x + scale_right * right.x,
-            y: scale_left * left.y + scale_right * right.y,
-            z: scale_left * left.z + scale_right * right.z,
-        }
-    };
-    normalize_quaternion(&mut out);
-    out
-}
-
-fn normalize_quaternion(value: &mut pb::Quaternion) {
-    let norm =
-        (value.w * value.w + value.x * value.x + value.y * value.y + value.z * value.z).sqrt();
-    if norm > f64::EPSILON {
-        value.w /= norm;
-        value.x /= norm;
-        value.y /= norm;
-        value.z /= norm;
-    }
 }
 
 #[cfg(test)]
@@ -674,9 +597,11 @@ mod tests {
                 spoilers_ratio: Some(0.5),
                 ..Default::default()
             }),
-            engines: vec![pb::EngineState {
-                index: 1,
-                throttle_lever_ratio: Some(0.2 + 0.1 * timestamp_index),
+            propulsors: vec![pb::PropulsorState {
+                propulsor_id: "engine".to_string(),
+                index: Some(1),
+                throttle_ratio: Some(0.2 + 0.1 * timestamp_index),
+                ..Default::default()
             }],
             ..Default::default()
         }
@@ -743,7 +668,7 @@ mod tests {
         assert!((derived.altitude - 1009.0).abs() < 1e-9);
         let controls = frame.state.control_surfaces.unwrap();
         assert!((controls.elevator_rad.unwrap() - 0.09).abs() < 1e-9);
-        assert!((frame.state.engines[0].throttle_lever_ratio.unwrap() - 0.29).abs() < 1e-9);
+        assert!((frame.state.propulsors[0].throttle_ratio.unwrap() - 0.29).abs() < 1e-9);
     }
 
     #[test]
@@ -790,6 +715,10 @@ mod tests {
             .pose
             .heading_true_rad;
         assert!(!(0.05..=6.20).contains(&heading));
+        let yaw = Attitude::try_from(frame.state.attitude.as_ref().unwrap())
+            .unwrap()
+            .euler()[2];
+        assert!(yaw.abs() < 0.2);
     }
 
     #[derive(Default)]

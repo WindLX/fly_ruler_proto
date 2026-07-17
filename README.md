@@ -9,9 +9,11 @@ FlyRuler 的协议内核与多语言绑定。飞行器状态通过 protobuf/UDP 
 
 ## 核心能力
 
-- **统一协议**：`proto/fly_ruler.proto` 是唯一 wire schema，Python 客户端、Godot 可视化、MSFS 2024 桥接器全部复用同一套数据模型。
+- **统一协议**：`core/proto/fly_ruler.proto` 是唯一 wire schema，Python 客户端、Godot 可视化、MSFS 2024 桥接器全部复用同一套数据模型。
 - **时序数据内核**：基于 UDP 的会话管理、内存中的时序 Store、Parquet 持久化、回放与 seek API。
+- **Schema-first telemetry**：client 在 spawn 时注册 aircraft/controller/sensor/runtime 等 stream，Web 可在首个 sample 到来前配置曲线。
 - **内置 Web 管理服务器**：`fly-ruler-server` 直接托管前端 dist，浏览器打开即可管理飞行器、查看曲线、保存/加载会话、回放数据。
+- **有界曲线显示**：Inspector 可配置每条曲线的显示点数，历史与实时数据使用 LTTB 降采样，且不删除 server 原始样本。
 - **多语言绑定**：提供 Python、Godot 4 GDExtension，以及 MSFS 2024 桥接器。
 - **自定义事件**：通过 UDP 发送事件（如 `flyruler.control.gear_up` / `gear_down`），无需扩展 protobuf schema。
 
@@ -29,6 +31,8 @@ just run-server
 
 # 浏览器打开 http://127.0.0.1:18003/
 ```
+
+server 会自动读取当前目录的 `fly-ruler-server.toml`。可从 [`server/fly-ruler-server.example.toml`](server/fly-ruler-server.example.toml) 复制模板，配置 UDP/HTTP 地址、heartbeat、会话目录、Web 资源、回放速度和日志；命令行参数仍可覆盖 TOML。
 
 开发模式下可以分别启动后端和 Vite 开发服务器：
 
@@ -56,7 +60,7 @@ uv run python examples/demo_client.py
 从 Release 页面下载最新 MSFS 2024 桥接包（包含 `fly-ruler-msfs-bridge.exe`、`SimConnect.dll`、示例 TOML 和内置 Web 控制台）：
 
 ```bash
-wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.2.4/fly-ruler-msfs-windows-x86_64.zip
+wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.3.0/fly-ruler-msfs-windows-x86_64.zip
 unzip fly-ruler-msfs-windows-x86_64.zip -d fly-ruler-msfs
 ```
 
@@ -103,6 +107,8 @@ uv run python examples/demo_msfs_client.py
 
 默认地址为 UDP `127.0.0.1:18002` 和 HTTP/WS `127.0.0.1:18003`。Web 控制台内部使用原始秒时间戳查询和 seek，但以数据起点为零展示相对时间，并在 Unix 时间可用时同时显示本地绝对时间。
 
+协议 request timestamp 是生产者定义的有限源时间轴秒数，而不是强制 Unix 时间。客户端省略 timestamp 时使用 Unix wall time；显式仿真时间可以从 0 开始，但同一 session 的 spawn、state、telemetry、event 与 despawn 必须使用一致时间基准。服务端使用本地单调接收时间判断 live state 是否 stale，因此仿真时间不会被错误地与 Unix 时间相减。
+
 加载新的 Session 后，Web 控制台会校验持久化的查询范围和飞机绑定：失效的时间范围自动恢复为完整数据范围，单机 Session 自动迁移旧曲线绑定，多机 Session 可在右侧 Inspector 中手动重新绑定。
 
 ## 开发构建
@@ -129,10 +135,10 @@ just package-msfs
 
 ```bash
 # 先预览会改哪些文件
-just set-version 0.2.4 --dry-run
+just set-version 0.3.0 --dry-run
 
-# 正式更新；也支持 v0.2.4 写法
-just set-version 0.2.4
+# 正式更新；也支持 v0.3.0 写法
+just set-version 0.3.0
 ```
 
 脚本只修改项目自身版本，不会创建 commit、tag 或上传包。更新后建议执行：

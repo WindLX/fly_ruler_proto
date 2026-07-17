@@ -19,7 +19,7 @@ UDP 网络  →  Fly Ruler Server / MSFS / Godot
 - `PyClient`：Rust 实现的 aircraft-bound 客户端（一个实例对应一架飞行器）。
 - `FlyRulerClient`：Python 高层包装，提供上下文管理器与最佳实践。
 
-发送到 `fly-ruler-server` 的状态可以在同仓库 Web 控制台中实时查看、绘制 历史曲线、按事件跳转和回放。显式 `timestamp` 仍使用秒；推荐 Unix wall time，前端会自动转换为相对仿真时间显示。
+发送到 `fly-ruler-server` 的状态可以在同仓库 Web 控制台中实时查看、绘制历史曲线、按事件跳转和回放。显式 `timestamp` 是生产者定义的有限源时间轴秒数，可以使用 Unix wall time，也可以从 0 开始使用仿真时间；后一种情况必须同时设置 `spawn_timestamp`，并让 state、telemetry、event 与 despawn 使用相同时间基准。Live stale 使用服务端单调接收时间判定，不依赖源时间是否为 Unix 时间。
 
 ## 2. 环境准备
 
@@ -70,21 +70,22 @@ zero = Vector3.zero()
 | `y` | `float` | Y 分量 |
 | `z` | `float` | Z 分量 |
 
-### 3.2 `Quaternion`
+### 3.2 `Attitude`
 
 ```python
-from fly_ruler_proto_python import Quaternion
+from fly_ruler_proto_python import Attitude
 
-q = Quaternion(1.0, 0.0, 0.0, 0.0)
-identity = Quaternion.identity()
+identity = Attitude.identity()
+from_quaternion = Attitude.from_quaternion((1.0, 0.0, 0.0, 0.0))
+from_matrix = Attitude.from_rotation_matrix((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+from_euler = Attitude.from_euler((0.0, 0.0, 0.0))
 ```
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `w` | `float` | 实部 |
-| `x` | `float` | 虚部 i |
-| `y` | `float` | 虚部 j |
-| `z` | `float` | 虚部 k |
+| `quaternion` | `tuple[float, float, float, float]` | Hamilton scalar-first `[w, x, y, z]` quaternion |
+| `rotation_matrix` | `tuple[float, ...]` | BODY-FRD→NED 3×3 row-major matrix |
+| `euler` | `tuple[float, float, float]` | 按需派生的 Z-Y-X `[roll, pitch, yaw]` Euler 角，单位 rad |
 
 ### 3.3 `DerivedState`
 
@@ -126,19 +127,18 @@ d = DerivedState(
 
 ```python
 from fly_ruler_proto_python import (
-    AircraftState, ControlSurfaceState, DerivedState, EngineState,
-    Quaternion, Vector3,
+    AircraftState, ControlSurfaceState, DerivedState, PropulsorKind,
+    PropulsorState, Attitude, Vector3,
 )
 
 state = AircraftState(
     position=Vector3(100.0, 200.0, -300.0),
     velocity=Vector3(1.0, 2.0, 3.0),
-    attitude=Quaternion(1.0, 0.0, 0.0, 0.0),
+    attitude=Attitude.identity(),
     angular_velocity=Vector3(0.1, 0.2, 0.3),
     derived=DerivedState(lat=30.0, lon=120.0, altitude=1000.0),
     control_surfaces=ControlSurfaceState(rudder_rad=0.1),
-    engines=[EngineState(1, throttle_lever_ratio=0.7)],
-    custom_fields={"flyruler.control.rudder_rad": 0.1},
+    propulsors=[PropulsorState("engine", kind=PropulsorKind.JET, throttle_ratio=0.7, index=1)],
 )
 
 # 悬停/默认状态
@@ -149,12 +149,12 @@ hover = AircraftState.hover()
 |------|------|------|
 | `position` | `Vector3` | 位置 |
 | `velocity` | `Vector3` | 速度 |
-| `attitude` | `Quaternion` | 姿态四元数 |
+| `attitude` | `Attitude` | 已校验的 BODY-FRD→NED 姿态，wire 上编码为 quaternion |
 | `angular_velocity` | `Vector3` | 角速度 |
 | `derived` | `DerivedState \| None` | 派生气动/导航状态 |
 | `control_surfaces` | `ControlSurfaceState \| None` | 标准舵面状态 |
-| `engines` | `list[EngineState]` | 从 1 开始编号的逐发动机状态 |
-| `custom_fields` | `dict[str, float \| int \| bool \| str \| bytes]` | protobuf 扩展字段 |
+| `linear_acceleration_body` | `Vector3 \| None` | Body-FRD 线加速度，m/s² |
+| `propulsors` | `list[PropulsorState]` | jet、propeller 或 rotor 的规范推进状态；可选 index 用于 MSFS 槽位 |
 
 ### 3.5 辅助函数 `create_aircraft_state`
 
@@ -168,13 +168,11 @@ state = create_aircraft_state(
     angular_velocity=(0.4, 0.5, 0.6),
     derived=DerivedState(lat=30.0, lon=120.0, altitude=1000.0),
     control_surfaces=ControlSurfaceState(rudder_rad=0.1),
-    engines=[EngineState(1, throttle_lever_ratio=0.7)],
-    custom_fields={"flyruler.control.rudder_rad": 0.1},
+    propulsors=[PropulsorState("engine", kind=PropulsorKind.JET, throttle_ratio=0.7, index=1)],
 )
 ```
 
-提供元组形式的便捷构造，并可传入标准空气数据、舵面、逐发动机状态与
-类型化 `custom_fields`。
+提供元组形式的便捷构造，并可传入标准空气数据、舵面、Body-FRD 加速度与推进器状态。模型内部诊断量通过预注册 telemetry schema 发布，不进入 `AircraftState`。
 
 ## 4. `FlyRulerClient` — 高层客户端
 
@@ -189,6 +187,8 @@ class FlyRulerClient:
         initial_state: AircraftState | None = None,
         toml_config: str = "",
         heartbeat_interval_secs: float = 1.0,
+        telemetry_schemas: Sequence[TelemetryStreamSchema] = (),
+        spawn_timestamp: float | None = None,
     ) -> None: ...
 ```
 
@@ -199,6 +199,8 @@ class FlyRulerClient:
 | `initial_state` | `AircraftState \| None` | `None` | 初始状态，默认悬停 |
 | `toml_config` | `str` | `""` | TOML 格式飞行器配置 |
 | `heartbeat_interval_secs` | `float` | `1.0` | 心跳间隔（秒） |
+| `telemetry_schemas` | `Sequence[TelemetryStreamSchema]` | `()` | 在 spawn 时注册的不可变 telemetry stream |
+| `spawn_timestamp` | `float \| None` | `None` | spawn 使用的时间戳；使用仿真时间发布样本时应传入初始仿真时间 |
 
 构造函数会**自动完成**：连接 UDP、发送 Handshake、发送 Spawn 请求。
 
@@ -219,6 +221,26 @@ client.update_state(state, timestamp=123.456)
 ```
 
 向服务端发送飞行器状态更新。
+
+#### `publish_telemetry(stream_id, values, timestamp=None)`
+
+```python
+from fly_ruler_proto_python import TelemetryField, TelemetryStreamSchema, TelemetryValueType
+
+schema = TelemetryStreamSchema(
+    "controller",
+    [
+        TelemetryField("controller.pitch.error", "Pitch error", "Pitch", "rad"),
+        TelemetryField("controller.saturated", value_type=TelemetryValueType.Bool),
+    ],
+    nominal_rate_hz=100.0,
+)
+
+with FlyRulerClient(address, "GTM", telemetry_schemas=[schema], spawn_timestamp=0.0) as client:
+    client.publish_telemetry("controller", (pitch_error, saturated), timestamp=t)
+```
+
+`values` 必须按 schema 字段顺序传入，数量和 `f64/i64/bool` 类型都会在 Python/Rust 边界校验。Schema 在一次 aircraft 生命周期内不可变，server 因而能在首个 sample 到来前提供字段目录。向量与矩阵应展开成稳定标量 field id，例如 `sensor.imu.accel.x`。
 
 #### `create_event(event_name, timestamp=None)`
 
@@ -348,8 +370,8 @@ AI 模式下可能不会完整驱动座舱/HUD/插件动画，建议先用 stock
 ```python
 from fly_ruler_proto_python import PROTOCOL_VERSION, get_protocol_version
 
-print(PROTOCOL_VERSION)           # "0.2.4"
-print(get_protocol_version())     # "0.2.4"
+print(PROTOCOL_VERSION)           # "0.3.0"
+print(get_protocol_version())     # "0.3.0"
 ```
 
 版本号来自 `fly_ruler_proto_core::PROTOCOL_VERSION`，所有绑定共享同一来源。
@@ -419,7 +441,7 @@ pytest tests/
 
 测试覆盖：
 
-- 数据类构造与属性读写（`Vector3`、`Quaternion`、`DerivedState`、`AircraftState`）
+- 数据类构造与属性读写（`Vector3`、`Attitude`、`DerivedState`、`AircraftState`）
 - `create_aircraft_state` 辅助函数
 - 协议版本一致性
 - `FlyRulerClient` 包装器转发与上下文管理器行为
@@ -452,7 +474,7 @@ build-backend = "maturin"
 
 [project]
 name = "fly_ruler_proto_python"
-version = "0.2.4"
+version = "0.3.0"
 requires-python = ">=3.10"
 ```
 
@@ -465,4 +487,4 @@ requires-python = ">=3.10"
 - 内核文档：`../../core/README.md`
 - Godot 绑定：`../godot/README.md`
 - 项目总览：`../../AGENTS.md`
-- Protobuf Schema：`../../proto/fly_ruler.proto`
+- Protobuf Schema：`../../core/proto/fly_ruler.proto`

@@ -15,6 +15,15 @@ use crate::PROTOCOL_VERSION;
 
 use super::TransportError;
 
+fn validate_source_timestamp(timestamp: Option<f64>) -> Result<(), TransportError> {
+    if timestamp.is_some_and(|value| !value.is_finite()) {
+        return Err(TransportError::InvalidMessage(
+            "source timestamp must be finite".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Low-level UDP client for protobuf transport.
 pub struct Client {
     socket: UdpSocket,
@@ -59,6 +68,8 @@ impl Client {
         aircraft_name: String,
         toml_config: String,
         initial_state: pb::AircraftState,
+        telemetry_schemas: Vec<pb::TelemetryStreamSchema>,
+        timestamp: Option<f64>,
     ) -> pb::Message {
         Self::make_request(
             pb::request_command::Kind::AircraftEvent(pb::AircraftEvent {
@@ -69,11 +80,12 @@ impl Client {
                             name: aircraft_name,
                             toml_config,
                             initial_state: Some(initial_state),
+                            telemetry_schemas,
                         },
                     )),
                 }),
             }),
-            None,
+            timestamp,
         )
     }
 
@@ -103,6 +115,22 @@ impl Client {
                 aircraft_id: Some(aircraft_uuid),
                 info: Some(pb::AircraftCommandInfo {
                     kind: Some(pb::aircraft_command_info::Kind::CustomEvent(event_name)),
+                }),
+            }),
+            timestamp,
+        )
+    }
+
+    fn build_telemetry_frame_message(
+        aircraft_uuid: pb::Uuid,
+        frame: pb::TelemetryFrame,
+        timestamp: Option<f64>,
+    ) -> pb::Message {
+        Self::make_request(
+            pb::request_command::Kind::AircraftEvent(pb::AircraftEvent {
+                aircraft_id: Some(aircraft_uuid),
+                info: Some(pb::AircraftCommandInfo {
+                    kind: Some(pb::aircraft_command_info::Kind::TelemetryFrame(frame)),
                 }),
             }),
             timestamp,
@@ -198,6 +226,13 @@ enum Operation {
         /// Optional explicit timestamp.
         timestamp: Option<f64>,
     },
+    /// Publish one schema-validated telemetry frame.
+    PublishTelemetry {
+        /// Stream values and sequence.
+        frame: Box<pb::TelemetryFrame>,
+        /// Optional explicit timestamp.
+        timestamp: Option<f64>,
+    },
     /// Despawn the aircraft.
     Despawn {
         /// Optional reason string.
@@ -246,6 +281,60 @@ impl AircraftClient {
         toml_config: String,
         heartbeat_interval_secs: f64,
     ) -> Result<Self, TransportError> {
+        Self::connect_with_telemetry(
+            addr,
+            logging_config,
+            aircraft_name,
+            initial_state,
+            toml_config,
+            heartbeat_interval_secs,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Connect and register immutable telemetry stream schemas at spawn.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_with_telemetry(
+        addr: &str,
+        logging_config: &LoggingConfig,
+        aircraft_name: String,
+        initial_state: pb::AircraftState,
+        toml_config: String,
+        heartbeat_interval_secs: f64,
+        telemetry_schemas: Vec<pb::TelemetryStreamSchema>,
+    ) -> Result<Self, TransportError> {
+        Self::connect_with_telemetry_at(
+            addr,
+            logging_config,
+            aircraft_name,
+            initial_state,
+            toml_config,
+            heartbeat_interval_secs,
+            telemetry_schemas,
+            None,
+        )
+        .await
+    }
+
+    /// Connect, register telemetry schemas, and place spawn on an explicit time base.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_with_telemetry_at(
+        addr: &str,
+        logging_config: &LoggingConfig,
+        aircraft_name: String,
+        initial_state: pb::AircraftState,
+        toml_config: String,
+        heartbeat_interval_secs: f64,
+        telemetry_schemas: Vec<pb::TelemetryStreamSchema>,
+        spawn_timestamp: Option<f64>,
+    ) -> Result<Self, TransportError> {
+        validate_source_timestamp(spawn_timestamp)?;
+        if !heartbeat_interval_secs.is_finite() || heartbeat_interval_secs <= 0.0 {
+            return Err(TransportError::InvalidMessage(
+                "heartbeat interval must be finite and greater than zero".to_string(),
+            ));
+        }
         let client_uuid = Uuid::new_v4();
         let aircraft_uuid = Uuid::new_v4();
         let client_uuid_for_handshake = client_uuid;
@@ -305,6 +394,8 @@ impl AircraftClient {
                     aircraft_name,
                     toml_config,
                     initial_state,
+                    telemetry_schemas,
+                    spawn_timestamp,
                 ))),
                 "spawn",
             );
@@ -334,6 +425,17 @@ impl AircraftClient {
                                 timestamp,
                             ))),
                             "custom_event",
+                        );
+                    }
+                    Operation::PublishTelemetry { frame, timestamp } => {
+                        send_outbound(
+                            &op_out_tx,
+                            Outbound::Send(Box::new(Client::build_telemetry_frame_message(
+                                uuid_to_pb(aircraft_uuid_for_ops),
+                                *frame,
+                                timestamp,
+                            ))),
+                            "telemetry_frame",
                         );
                     }
                     Operation::Despawn { reason, timestamp } => {
@@ -421,6 +523,7 @@ impl AircraftClient {
         timestamp: Option<f64>,
     ) -> Result<(), TransportError> {
         self.ensure_open()?;
+        validate_source_timestamp(timestamp)?;
         self.send_operation(Operation::UpdateState {
             state: Box::new(state),
             timestamp,
@@ -434,8 +537,23 @@ impl AircraftClient {
         timestamp: Option<f64>,
     ) -> Result<(), TransportError> {
         self.ensure_open()?;
+        validate_source_timestamp(timestamp)?;
         self.send_operation(Operation::CreateEvent {
             event_name,
+            timestamp,
+        })
+    }
+
+    /// Enqueue a telemetry frame for the aircraft.
+    pub fn publish_telemetry(
+        &self,
+        frame: pb::TelemetryFrame,
+        timestamp: Option<f64>,
+    ) -> Result<(), TransportError> {
+        self.ensure_open()?;
+        validate_source_timestamp(timestamp)?;
+        self.send_operation(Operation::PublishTelemetry {
+            frame: Box::new(frame),
             timestamp,
         })
     }
@@ -450,6 +568,7 @@ impl AircraftClient {
         if self.despawned {
             return Ok(());
         }
+        validate_source_timestamp(timestamp)?;
         self.send_operation(Operation::Despawn { reason, timestamp })?;
         self.despawned = true;
         Ok(())
@@ -535,5 +654,19 @@ fn send_outbound(tx: &mpsc::UnboundedSender<Outbound>, outbound: Outbound, kind:
             error = %e,
             "failed to enqueue outbound message; sender task may have exited"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_timestamps_accept_simulation_time_and_reject_non_finite_values() {
+        assert!(validate_source_timestamp(Some(0.0)).is_ok());
+        assert!(validate_source_timestamp(Some(-12.5)).is_ok());
+        assert!(validate_source_timestamp(None).is_ok());
+        assert!(validate_source_timestamp(Some(f64::NAN)).is_err());
+        assert!(validate_source_timestamp(Some(f64::INFINITY)).is_err());
     }
 }

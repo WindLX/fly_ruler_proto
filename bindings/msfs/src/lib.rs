@@ -3,7 +3,7 @@
 use std::f64::consts::TAU;
 
 use fly_ruler_proto_core::pb;
-use fly_ruler_proto_core::{Event, PlaybackMode, TimeSeriesStore};
+use fly_ruler_proto_core::{Attitude, AttitudeError, Event, PlaybackMode, TimeSeriesStore};
 use thiserror::Error;
 
 #[cfg(windows)]
@@ -16,24 +16,6 @@ pub mod events {
     pub const GEAR_UP: &str = "flyruler.control.gear_up";
     /// Extend the landing gear through the MSFS gear handle.
     pub const GEAR_DOWN: &str = "flyruler.control.gear_down";
-}
-
-/// Reserved FlyRuler custom field identifiers understood by the MSFS bridge.
-pub mod fields {
-    /// Left aileron deflection in radians.
-    pub const AILERON_LEFT: &str = "flyruler.control.aileron_left_rad";
-    /// Right aileron deflection in radians.
-    pub const AILERON_RIGHT: &str = "flyruler.control.aileron_right_rad";
-    /// Elevator deflection in radians.
-    pub const ELEVATOR: &str = "flyruler.control.elevator_rad";
-    /// Rudder deflection in radians.
-    pub const RUDDER: &str = "flyruler.control.rudder_rad";
-    /// Left trailing-edge flap ratio in the inclusive range 0..=1.
-    pub const FLAPS_LEFT: &str = "flyruler.control.flaps_left_ratio";
-    /// Right trailing-edge flap ratio in the inclusive range 0..=1.
-    pub const FLAPS_RIGHT: &str = "flyruler.control.flaps_right_ratio";
-    /// Symmetric spoiler handle ratio in the inclusive range 0..=1.
-    pub const SPOILERS: &str = "flyruler.control.spoilers_ratio";
 }
 
 /// A pose expressed using writable MSFS simulation variables.
@@ -91,9 +73,9 @@ pub struct MsfsAirData {
     pub rotation_body_z_radps: f64,
 }
 
-/// Optional per-engine throttle lever positions.
+/// Optional propulsor throttle positions mapped to simulator slots.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct EngineThrottles {
+pub struct PropulsorThrottles {
     /// Engine indices 1 through 4 stored at array indices 0 through 3.
     pub ratios: [Option<f64>; 4],
 }
@@ -108,7 +90,7 @@ pub struct MsfsFrame {
     /// Optional airdata; invalid optional airdata does not invalidate the pose.
     pub airdata: Option<MsfsAirData>,
     /// Optional per-engine throttle values.
-    pub engines: EngineThrottles,
+    pub propulsors: PropulsorThrottles,
 }
 
 /// Input validation failures.
@@ -129,9 +111,9 @@ pub enum FrameError {
     /// Longitude is outside its valid range.
     #[error("longitude must be in -180..=180 degrees")]
     LongitudeRange,
-    /// Quaternion magnitude is too close to zero.
-    #[error("attitude quaternion has zero magnitude")]
-    ZeroQuaternion,
+    /// The attitude is not a valid finite SO(3) value.
+    #[error("invalid aircraft attitude: {0}")]
+    InvalidAttitude(#[from] AttitudeError),
 }
 
 /// Surface identifiers used by the simulator abstraction.
@@ -373,7 +355,7 @@ impl<S: Simulator> BridgeSession<S> {
         for (surface, value) in control_values(frame.controls) {
             self.simulator.set_surface(surface, value)?;
         }
-        for (offset, ratio) in frame.engines.ratios.into_iter().enumerate() {
+        for (offset, ratio) in frame.propulsors.ratios.into_iter().enumerate() {
             if let Some(ratio) = ratio {
                 self.simulator
                     .set_engine_throttle(offset as u32 + 1, ratio)?;
@@ -422,35 +404,7 @@ pub fn frame_from_state(state: &pb::AircraftState) -> Result<MsfsFrame, FrameErr
         return Err(FrameError::LongitudeRange);
     }
 
-    for (value, name) in [
-        (attitude.w, "quaternion w"),
-        (attitude.x, "quaternion x"),
-        (attitude.y, "quaternion y"),
-        (attitude.z, "quaternion z"),
-    ] {
-        finite(value, name)?;
-    }
-
-    let norm = (attitude.w * attitude.w
-        + attitude.x * attitude.x
-        + attitude.y * attitude.y
-        + attitude.z * attitude.z)
-        .sqrt();
-    if norm <= f64::EPSILON {
-        return Err(FrameError::ZeroQuaternion);
-    }
-    let (w, x, y, z) = (
-        attitude.w / norm,
-        attitude.x / norm,
-        attitude.y / norm,
-        attitude.z / norm,
-    );
-
-    // Hamilton quaternion rotating body-FRD into local NED.
-    let roll = (2.0 * (w * x + y * z)).atan2(1.0 - 2.0 * (x * x + y * y));
-    let sin_pitch = (2.0 * (w * y - z * x)).clamp(-1.0, 1.0);
-    let pitch = sin_pitch.asin();
-    let yaw = (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z));
+    let [roll, pitch, yaw] = Attitude::try_from(attitude)?.euler();
 
     Ok(MsfsFrame {
         pose: MsfsPose {
@@ -463,7 +417,7 @@ pub fn frame_from_state(state: &pb::AircraftState) -> Result<MsfsFrame, FrameErr
         },
         controls: controls_from_state(state),
         airdata: airdata_from_state(state),
-        engines: engines_from_state(state),
+        propulsors: propulsors_from_state(state),
     })
 }
 
@@ -496,14 +450,28 @@ pub fn optional_field_warnings(state: &pb::AircraftState) -> Vec<&'static str> {
         }
     }
 
-    for engine in &state.engines {
-        if !(1..=4).contains(&engine.index) {
-            warnings.push("invalid engine index; expected 1 through 4");
-        } else if engine
-            .throttle_lever_ratio
-            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
-        {
-            warnings.push("invalid engine throttle ratio");
+    let mut seen_indices = [false; 4];
+    for propulsor in &state.propulsors {
+        let Some(index) = propulsor.index else {
+            if propulsor.throttle_ratio.is_some() {
+                warnings.push("propulsor throttle has no simulator index");
+            }
+            continue;
+        };
+        if !(1..=4).contains(&index) {
+            warnings.push("invalid propulsor index; expected 1 through 4");
+        } else {
+            let slot = index as usize - 1;
+            if seen_indices[slot] {
+                warnings.push("duplicate propulsor index; last value wins");
+            }
+            seen_indices[slot] = true;
+            if propulsor
+                .throttle_ratio
+                .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+            {
+                warnings.push("invalid propulsor throttle ratio");
+            }
         }
     }
     warnings
@@ -517,35 +485,6 @@ fn finite(value: f64, name: &'static str) -> Result<(), FrameError> {
     }
 }
 
-fn controls_from_fields(fields_in: &[pb::CustomField]) -> ControlSurfaces {
-    let mut out = ControlSurfaces::default();
-    for field in fields_in {
-        let value = match field.value.as_ref().and_then(|v| v.kind.as_ref()) {
-            Some(pb::field_value::Kind::F64Value(value)) => *value,
-            Some(pb::field_value::Kind::I64Value(value)) => *value as f64,
-            _ => continue,
-        };
-
-        match field.field_id.as_str() {
-            fields::AILERON_LEFT => out.aileron_left_rad = Some(value),
-            fields::AILERON_RIGHT => out.aileron_right_rad = Some(value),
-            fields::ELEVATOR => out.elevator_rad = Some(value),
-            fields::RUDDER => out.rudder_rad = Some(value),
-            fields::FLAPS_LEFT if (0.0..=1.0).contains(&value) => {
-                out.flaps_left_ratio = Some(value);
-            }
-            fields::FLAPS_RIGHT if (0.0..=1.0).contains(&value) => {
-                out.flaps_right_ratio = Some(value);
-            }
-            fields::SPOILERS if (0.0..=1.0).contains(&value) => {
-                out.spoilers_ratio = Some(value);
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 fn valid_finite(value: Option<f64>) -> Option<f64> {
     value.filter(|value| value.is_finite())
 }
@@ -555,7 +494,7 @@ fn valid_ratio(value: Option<f64>) -> Option<f64> {
 }
 
 fn controls_from_state(state: &pb::AircraftState) -> ControlSurfaces {
-    let mut out = controls_from_fields(&state.custom_fields);
+    let mut out = ControlSurfaces::default();
     let Some(standard) = state.control_surfaces.as_ref() else {
         return out;
     };
@@ -608,14 +547,17 @@ fn airdata_from_state(state: &pb::AircraftState) -> Option<MsfsAirData> {
     })
 }
 
-fn engines_from_state(state: &pb::AircraftState) -> EngineThrottles {
-    let mut out = EngineThrottles::default();
-    for engine in &state.engines {
-        if !(1..=4).contains(&engine.index) {
+fn propulsors_from_state(state: &pb::AircraftState) -> PropulsorThrottles {
+    let mut out = PropulsorThrottles::default();
+    for propulsor in &state.propulsors {
+        let Some(index) = propulsor.index else {
+            continue;
+        };
+        if !(1..=4).contains(&index) {
             continue;
         }
-        if let Some(value) = valid_ratio(engine.throttle_lever_ratio) {
-            out.ratios[engine.index as usize - 1] = Some(value);
+        if let Some(value) = valid_ratio(propulsor.throttle_ratio) {
+            out.ratios[index as usize - 1] = Some(value);
         }
     }
     out
@@ -668,8 +610,8 @@ mod tests {
                 ..Default::default()
             }),
             control_surfaces: None,
-            engines: vec![],
-            custom_fields: vec![],
+            linear_acceleration_body: None,
+            propulsors: vec![],
         }
     }
 
@@ -706,17 +648,23 @@ mod tests {
         assert_eq!(frame_from_state(&state), Err(FrameError::LatitudeRange));
         state.derived.as_mut().unwrap().lat = 0.0;
         state.attitude = Some(pb::Quaternion::default());
-        assert_eq!(frame_from_state(&state), Err(FrameError::ZeroQuaternion));
+        assert_eq!(
+            frame_from_state(&state),
+            Err(FrameError::InvalidAttitude(
+                AttitudeError::InvalidQuaternion
+            ))
+        );
     }
 
     #[test]
     fn maps_valid_controls_and_ignores_invalid_ratios() {
         let mut state = state_with_yaw(0.0);
-        state.custom_fields = vec![
-            custom(fields::RUDDER, 0.12),
-            custom(fields::FLAPS_LEFT, 0.4),
-            custom(fields::SPOILERS, 1.5),
-        ];
+        state.control_surfaces = Some(pb::ControlSurfaceState {
+            rudder_rad: Some(0.12),
+            flaps_left_ratio: Some(0.4),
+            spoilers_ratio: Some(1.5),
+            ..Default::default()
+        });
         let controls = frame_from_state(&state).unwrap().controls;
         assert_eq!(controls.rudder_rad, Some(0.12));
         assert_eq!(controls.flaps_left_ratio, Some(0.4));
@@ -724,22 +672,12 @@ mod tests {
     }
 
     #[test]
-    fn standard_controls_override_legacy_fields() {
+    fn missing_standard_controls_produce_no_surface_writes() {
         let mut state = state_with_yaw(0.0);
-        state.custom_fields = vec![
-            custom(fields::RUDDER, 0.12),
-            custom(fields::FLAPS_LEFT, 0.4),
-            custom(fields::SPOILERS, 0.3),
-        ];
-        state.control_surfaces = Some(pb::ControlSurfaceState {
-            rudder_rad: Some(-0.2),
-            flaps_left_ratio: Some(0.6),
-            spoilers_ratio: Some(1.5),
-            ..Default::default()
-        });
+        state.control_surfaces = None;
         let controls = frame_from_state(&state).unwrap().controls;
-        assert_eq!(controls.rudder_rad, Some(-0.2));
-        assert_eq!(controls.flaps_left_ratio, Some(0.6));
+        assert_eq!(controls.rudder_rad, None);
+        assert_eq!(controls.flaps_left_ratio, None);
         assert_eq!(controls.spoilers_ratio, None);
     }
 
@@ -777,46 +715,58 @@ mod tests {
     }
 
     #[test]
-    fn maps_valid_engine_throttles_and_isolates_invalid_entries() {
+    fn maps_valid_propulsor_throttles_and_isolates_invalid_entries() {
         let mut state = state_with_yaw(0.0);
-        state.engines = vec![
-            pb::EngineState {
-                index: 1,
-                throttle_lever_ratio: Some(0.25),
+        state.propulsors = vec![
+            pb::PropulsorState {
+                propulsor_id: "engine.1".to_string(),
+                index: Some(1),
+                throttle_ratio: Some(0.25),
+                ..Default::default()
             },
-            pb::EngineState {
-                index: 2,
-                throttle_lever_ratio: Some(0.75),
+            pb::PropulsorState {
+                propulsor_id: "engine.2".to_string(),
+                index: Some(2),
+                throttle_ratio: Some(0.75),
+                ..Default::default()
             },
-            pb::EngineState {
-                index: 3,
-                throttle_lever_ratio: Some(1.5),
+            pb::PropulsorState {
+                propulsor_id: "engine.3".to_string(),
+                index: Some(3),
+                throttle_ratio: Some(1.5),
+                ..Default::default()
             },
-            pb::EngineState {
-                index: 5,
-                throttle_lever_ratio: Some(0.5),
+            pb::PropulsorState {
+                propulsor_id: "engine.5".to_string(),
+                index: Some(5),
+                throttle_ratio: Some(0.5),
+                ..Default::default()
+            },
+            pb::PropulsorState {
+                propulsor_id: "unmapped".to_string(),
+                throttle_ratio: Some(0.4),
+                ..Default::default()
+            },
+            pb::PropulsorState {
+                propulsor_id: "engine.2.backup".to_string(),
+                index: Some(2),
+                throttle_ratio: Some(0.9),
+                ..Default::default()
             },
         ];
         assert_eq!(
-            frame_from_state(&state).unwrap().engines.ratios,
-            [Some(0.25), Some(0.75), None, None]
+            frame_from_state(&state).unwrap().propulsors.ratios,
+            [Some(0.25), Some(0.9), None, None]
         );
         assert_eq!(
             optional_field_warnings(&state),
             [
-                "invalid engine throttle ratio",
-                "invalid engine index; expected 1 through 4"
+                "invalid propulsor throttle ratio",
+                "invalid propulsor index; expected 1 through 4",
+                "propulsor throttle has no simulator index",
+                "duplicate propulsor index; last value wins"
             ]
         );
-    }
-
-    fn custom(name: &str, value: f64) -> pb::CustomField {
-        pb::CustomField {
-            field_id: name.to_owned(),
-            value: Some(pb::FieldValue {
-                kind: Some(pb::field_value::Kind::F64Value(value)),
-            }),
-        }
     }
 
     #[derive(Default)]
@@ -866,10 +816,15 @@ mod tests {
             y: 0.0,
             z: 0.0,
         });
-        state.custom_fields.push(custom(fields::ELEVATOR, 0.1));
-        state.engines.push(pb::EngineState {
-            index: 2,
-            throttle_lever_ratio: Some(0.7),
+        state.control_surfaces = Some(pb::ControlSurfaceState {
+            elevator_rad: Some(0.1),
+            ..Default::default()
+        });
+        state.propulsors.push(pb::PropulsorState {
+            propulsor_id: "engine.2".to_string(),
+            index: Some(2),
+            throttle_ratio: Some(0.7),
+            ..Default::default()
         });
         let frame = frame_from_state(&state).unwrap();
         let mut session = BridgeSession::new(MockSimulator::default());

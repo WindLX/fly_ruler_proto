@@ -1,10 +1,11 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { mergeSeriesData, useSeriesStore } from '@/stores/series'
+import { api } from '@/api'
+import { downsampleSeriesData, mergeSeriesData, useSeriesStore } from '@/stores/series'
 import { useServerStore } from '@/stores/server'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { CurveStyle, SeriesData, TimestampedState } from '@/types'
+import type { CurveStyle, SeriesData } from '@/types'
 import { curveKey } from '@/utils'
 
 const curve: CurveStyle = {
@@ -42,8 +43,7 @@ describe('dashboard stores', () => {
           angular_velocity: null,
           derived: null,
           control_surfaces: null,
-          engines: [],
-          custom_fields: {},
+          propulsors: [],
         },
       },
     }
@@ -51,63 +51,81 @@ describe('dashboard stores', () => {
     expect(store.availableAircraftIds).toEqual(['live-aircraft'])
   })
 
-  it('deduplicates and orders live points', () => {
+  it('queries incremental live samples with the configured point budget', async () => {
+    const key = curveKey(curve)
+    const query = vi
+      .spyOn(api, 'querySeries')
+      .mockResolvedValueOnce({
+        series: [
+          {
+            key,
+            aircraft_id: curve.aircraft_id,
+            selector: curve.selector,
+            points: [
+              [1, 10],
+              [2, 20],
+            ],
+            total_points: 2,
+            returned_points: 2,
+            stats: { min: 10, max: 20, last: 20, start: 1, end: 2 },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        series: [
+          {
+            key,
+            aircraft_id: curve.aircraft_id,
+            selector: curve.selector,
+            points: [
+              [2, 20],
+              [2.5, 25],
+              [3, 30],
+            ],
+            total_points: 3,
+            returned_points: 3,
+            stats: { min: 20, max: 30, last: 30, start: 2, end: 3 },
+          },
+        ],
+      })
     const store = useSeriesStore()
-    store.appendLive(curve, 2, 20, 100)
-    store.appendLive(curve, 2, 21, 100)
-    store.appendLive(curve, 1, 10, 100)
-    expect(Object.values(store.data)[0]?.points).toEqual([
+
+    await store.catchUpLiveCurves([curve], [1, 2], 100)
+    await store.catchUpLiveCurves([curve], [1, 3], 100)
+
+    expect(query).toHaveBeenNthCalledWith(1, expect.any(Array), { start: 1, end: 2 }, 100)
+    expect(query).toHaveBeenNthCalledWith(2, expect.any(Array), { start: 2, end: 3 }, 100)
+    expect(store.data[key]?.points).toEqual([
       [1, 10],
-      [2, 21],
+      [2, 20],
+      [2.5, 25],
+      [3, 30],
     ])
   })
 
-  it('merges websocket snapshots into configured live curves', () => {
-    const store = useSeriesStore()
-    const sample: TimestampedState = {
-      timestamp_secs: 10,
-      state: {
-        position: { x: 42, y: 0, z: 0 },
-        velocity: null,
-        attitude: null,
-        angular_velocity: null,
-        derived: null,
-        control_surfaces: null,
-        engines: [],
-        custom_fields: {},
-      },
-    }
-
-    store.mergeLiveSamples([curve], { 'aircraft-1': sample }, 100, true)
-    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 42]])
-
-    store.mergeLiveSamples(
-      [curve],
+  it('bounds merged live display points with LTTB and preserves endpoints', () => {
+    const points = Array.from({ length: 1000 }, (_, index) => [
+      index,
+      Math.sin(index / 10),
+    ]) as Array<[number, number]>
+    const sampled = downsampleSeriesData(
       {
-        'aircraft-1': {
-          ...sample,
-          timestamp_secs: 10,
-          state: { ...sample.state, position: { x: 43, y: 0, z: 0 } },
-        },
+        key: curveKey(curve),
+        aircraft_id: curve.aircraft_id,
+        selector: curve.selector,
+        points,
+        total_points: points.length,
+        returned_points: points.length,
+        stats: { min: -1, max: 1, last: points[999]![1], start: 0, end: 999 },
       },
       100,
-      true,
     )
-    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 43]])
 
-    store.mergeLiveSamples(
-      [curve],
-      {
-        'aircraft-1': {
-          ...sample,
-          timestamp_secs: 11,
-          state: { ...sample.state, position: { x: 44, y: 0, z: 0 } },
-        },
-      },
-      100,
-      false,
-    )
-    expect(store.data[curveKey(curve)]?.points).toEqual([[10, 43]])
+    expect(sampled.points).toHaveLength(100)
+    expect(sampled.points[0]).toEqual(points[0])
+    expect(sampled.points[99]).toEqual(points[999])
+    expect(sampled.total_points).toBe(1000)
+    expect(sampled.returned_points).toBe(100)
   })
 
   it('keeps newer live points when a historical series response arrives late', () => {
@@ -138,7 +156,7 @@ describe('dashboard stores', () => {
       stats: { min: 10, max: 999, last: 30, start: 1, end: 3 },
     }
 
-    expect(mergeSeriesData(existing, incoming, 100, 'existing').points).toEqual([
+    expect(mergeSeriesData(existing, incoming, 'existing').points).toEqual([
       [1, 10],
       [2, 20],
       [3, 30],
@@ -173,7 +191,6 @@ describe('dashboard stores', () => {
         returned_points: 2,
         stats: { min: 20, max: 40, last: 40, start: 2, end: 4 },
       },
-      3,
       'incoming',
     )
 

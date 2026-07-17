@@ -1,11 +1,7 @@
 [configuration]
 entry_symbol = "gdext_rust_init"
-compatibility_minimum = "4.2"
+compatibility_minimum = "4.7"
 
 [libraries]
 linux.debug.x86_64 = "res://addons/fly_ruler_proto/libfly_ruler_proto_godot.so"
 linux.release.x86_64 = "res://addons/fly_ruler_proto/libfly_ruler_proto_godot.so"
-windows.debug.x86_64 = "res://addons/fly_ruler_proto/fly_ruler_proto_godot.dll"
-windows.release.x86_64 = "res://addons/fly_ruler_proto/fly_ruler_proto_godot.dll"
-macos.debug = "res://addons/fly_ruler_proto/libfly_ruler_proto_godot.dylib"
-macos.release = "res://addons/fly_ruler_proto/libfly_ruler_proto_godot.dylib"

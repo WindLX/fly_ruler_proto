@@ -97,9 +97,6 @@ function fieldLabel(field: (typeof catalog.value)[number]): string {
     const key = `fields.paths.${field.selector.path.split('.').join('_')}`
     return te(key) ? t(key) : field.label
   }
-  if (field.selector.kind === 'engine_throttle') {
-    return t('fields.engineThrottle', { index: field.selector.index })
-  }
   return field.label
 }
 

@@ -5,10 +5,12 @@
 //! - Aircraft level: create/read/update/delete and per-aircraft settings
 //! - Async persistence and restore
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{Duration, Instant};
 
 use arrow::array::{Array, BinaryArray, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -36,6 +38,8 @@ pub struct AircraftConfig {
     pub name: String,
     /// Raw TOML configuration string.
     pub toml_config: String,
+    /// Immutable telemetry stream schemas registered at spawn.
+    pub telemetry_schemas: Vec<pb::TelemetryStreamSchema>,
 }
 
 /// Lifecycle events that can be stored for an aircraft.
@@ -52,7 +56,7 @@ pub enum Event {
 /// A single aircraft state sample with its timestamp.
 #[derive(Debug, Clone)]
 pub struct TimestampedState {
-    /// Timestamp in seconds since the Unix epoch.
+    /// Timestamp in seconds on the producer-defined source timeline.
     pub timestamp_secs: f64,
     /// Aircraft state at this timestamp.
     pub state: pb::AircraftState,
@@ -61,10 +65,19 @@ pub struct TimestampedState {
 /// A single aircraft event with its timestamp.
 #[derive(Debug, Clone)]
 pub struct TimestampedEvent {
-    /// Timestamp in seconds since the Unix epoch.
+    /// Timestamp in seconds on the producer-defined source timeline.
     pub timestamp_secs: f64,
     /// Event that occurred at this timestamp.
     pub event: Event,
+}
+
+/// One schema-validated telemetry frame with its timestamp.
+#[derive(Debug, Clone)]
+pub struct TimestampedTelemetryFrame {
+    /// Frame timestamp in seconds.
+    pub timestamp_secs: f64,
+    /// Telemetry values and stream sequence.
+    pub frame: pb::TelemetryFrame,
 }
 
 /// A lifecycle/custom event paired with its aircraft identifier.
@@ -85,6 +98,8 @@ pub struct AircraftTimeSeries {
     pub states: Vec<TimestampedState>,
     /// Lifecycle events, kept sorted by timestamp.
     pub events: Vec<TimestampedEvent>,
+    /// Telemetry frames, retained without automatic trimming.
+    pub telemetry: Vec<TimestampedTelemetryFrame>,
     /// Configuration set by the first `Spawn` event.
     pub config: Option<AircraftConfig>,
 }
@@ -102,6 +117,8 @@ pub struct AircraftSummary {
     pub state_count: usize,
     /// Number of stored lifecycle/custom events.
     pub event_count: usize,
+    /// Number of stored telemetry frames.
+    pub telemetry_count: usize,
 }
 
 /// One page of a bounded time-range query.
@@ -121,6 +138,7 @@ pub struct StorePage<T> {
 #[derive(Debug, Default)]
 pub struct TimeSeriesStore {
     data: RwLock<DashMap<AircraftId, AircraftTimeSeries>>,
+    live_state_receipts: DashMap<AircraftId, Instant>,
 }
 
 /// Errors that can occur when persisting or loading store data.
@@ -172,6 +190,7 @@ impl TimeSeriesStore {
     pub fn new() -> Self {
         Self {
             data: RwLock::new(DashMap::new()),
+            live_state_receipts: DashMap::new(),
         }
     }
 
@@ -179,6 +198,10 @@ impl TimeSeriesStore {
     ///
     /// States are kept sorted by timestamp.
     pub fn append_state(&self, id: AircraftId, timestamp: f64, state: pb::AircraftState) {
+        if !timestamp.is_finite() {
+            warn!(target: "fly_ruler_proto_core.store", aircraft_id = id, "ignored state with non-finite source timestamp");
+            return;
+        }
         let data = read_unpoisoned(&self.data);
         let mut series = data.entry(id).or_default();
         if series
@@ -210,12 +233,17 @@ impl TimeSeriesStore {
     /// Events are kept sorted by timestamp. A `Spawn` event sets the aircraft
     /// configuration.
     pub fn append_event(&self, id: AircraftId, timestamp: f64, event: Event) {
+        if !timestamp.is_finite() {
+            warn!(target: "fly_ruler_proto_core.store", aircraft_id = id, "ignored event with non-finite source timestamp");
+            return;
+        }
         let data = read_unpoisoned(&self.data);
         let mut series = data.entry(id).or_default();
         if let Event::Spawn(spawn) = &event {
             series.config = Some(AircraftConfig {
                 name: spawn.name.clone(),
                 toml_config: spawn.toml_config.clone(),
+                telemetry_schemas: spawn.telemetry_schemas.clone(),
             });
         }
 
@@ -243,6 +271,47 @@ impl TimeSeriesStore {
         );
     }
 
+    /// Append a telemetry frame after validating it against the spawn schema.
+    pub fn append_telemetry(
+        &self,
+        id: AircraftId,
+        timestamp: f64,
+        frame: pb::TelemetryFrame,
+    ) -> Result<(), StoreError> {
+        if !timestamp.is_finite() {
+            return Err(StoreError::InvalidData(
+                "telemetry timestamp must be finite".to_string(),
+            ));
+        }
+        let data = read_unpoisoned(&self.data);
+        let mut series = data
+            .get_mut(&id)
+            .ok_or_else(|| StoreError::InvalidData(format!("aircraft not found: {id}")))?;
+        let schemas = series
+            .config
+            .as_ref()
+            .map(|config| config.telemetry_schemas.as_slice())
+            .unwrap_or_default();
+        validate_telemetry_frame(schemas, &frame)?;
+        let sample = TimestampedTelemetryFrame {
+            timestamp_secs: timestamp,
+            frame,
+        };
+        if series
+            .telemetry
+            .last()
+            .is_none_or(|last| last.timestamp_secs <= timestamp)
+        {
+            series.telemetry.push(sample);
+        } else {
+            let insert_at = series
+                .telemetry
+                .partition_point(|entry| entry.timestamp_secs <= timestamp);
+            series.telemetry.insert(insert_at, sample);
+        }
+        Ok(())
+    }
+
     /// Append a protobuf message to the store using default store config.
     pub fn append_message(&self, msg: pb::Message) {
         self.append_message_with_config(msg, &StoreConfig);
@@ -262,6 +331,10 @@ impl TimeSeriesStore {
         };
 
         let timestamp = req.timestamp;
+        if !timestamp.is_finite() {
+            warn!(target: "fly_ruler_proto_core.store", "ignored aircraft event with non-finite source timestamp");
+            return;
+        }
         let Some(command) = req.command.and_then(|c| c.kind) else {
             warn!(target: "fly_ruler_proto_core.store", "ignored request without command");
             return;
@@ -285,21 +358,51 @@ impl TimeSeriesStore {
 
         match info {
             pb::aircraft_command_info::Kind::StateUpdate(state) => {
-                self.append_state(aircraft_id, timestamp, state);
+                self.append_state(aircraft_id.clone(), timestamp, state);
+                self.live_state_receipts.insert(aircraft_id, Instant::now());
             }
             pb::aircraft_command_info::Kind::Spawn(spawn) => {
+                if let Err(error) = validate_telemetry_schemas(&spawn.telemetry_schemas) {
+                    warn!(target: "fly_ruler_proto_core.store", aircraft_id = aircraft_id, error = %error, "ignored spawn with invalid telemetry schema");
+                    return;
+                }
                 if let Some(state) = spawn.initial_state.clone() {
                     self.append_state(aircraft_id.clone(), timestamp, state);
+                    self.live_state_receipts
+                        .insert(aircraft_id.clone(), Instant::now());
                 }
                 self.append_event(aircraft_id, timestamp, Event::Spawn(Box::new(spawn)));
             }
             pb::aircraft_command_info::Kind::Despawn(despawn) => {
-                self.append_event(aircraft_id, timestamp, Event::Despawn(despawn));
+                self.append_event(aircraft_id.clone(), timestamp, Event::Despawn(despawn));
+                self.live_state_receipts.remove(&aircraft_id);
             }
             pb::aircraft_command_info::Kind::CustomEvent(custom) => {
                 self.append_event(aircraft_id, timestamp, Event::Custom(custom));
             }
+            pb::aircraft_command_info::Kind::TelemetryFrame(frame) => {
+                if let Err(error) = self.append_telemetry(aircraft_id.clone(), timestamp, frame) {
+                    warn!(target: "fly_ruler_proto_core.store", aircraft_id = aircraft_id, error = %error, "ignored invalid telemetry frame");
+                }
+            }
         }
+    }
+
+    /// Return the local monotonic age of the last received live state packet.
+    ///
+    /// Source timestamps are intentionally not used here: producers may use
+    /// Unix time, simulation time starting at zero, or another shared replay
+    /// timeline. Loaded sessions and states appended directly to the store do
+    /// not have live receipt metadata and therefore return `None`.
+    pub fn live_state_age(&self, id: &str) -> Option<Duration> {
+        self.live_state_receipts
+            .get(id)
+            .map(|received_at| received_at.elapsed())
+    }
+
+    /// Return whether an aircraft has no live state receipt within `timeout`.
+    pub fn live_state_is_stale(&self, id: &str, timeout: Duration) -> bool {
+        self.live_state_age(id).is_none_or(|age| age > timeout)
     }
 
     /// Return the latest state sample for an aircraft, if any.
@@ -369,6 +472,38 @@ impl TimeSeriesStore {
                 .filter(|s| s.timestamp_secs >= start && s.timestamp_secs <= end)
                 .cloned()
                 .collect()
+        })
+    }
+
+    /// Return telemetry schemas registered for an aircraft.
+    pub fn get_telemetry_schemas(&self, id: &AircraftId) -> Option<Vec<pb::TelemetryStreamSchema>> {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
+            series
+                .config
+                .as_ref()
+                .map(|config| config.telemetry_schemas.clone())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Visit telemetry frames within an inclusive time range without cloning them.
+    pub fn visit_telemetry_range<R>(
+        &self,
+        id: &AircraftId,
+        start: f64,
+        end: f64,
+        visitor: impl FnOnce(&[TimestampedTelemetryFrame]) -> R,
+    ) -> Option<R> {
+        let data = read_unpoisoned(&self.data);
+        data.get(id).map(|series| {
+            let first = series
+                .telemetry
+                .partition_point(|sample| sample.timestamp_secs < start);
+            let last = series
+                .telemetry
+                .partition_point(|sample| sample.timestamp_secs <= end);
+            visitor(&series.telemetry[first..last])
         })
     }
 
@@ -612,13 +747,10 @@ impl TimeSeriesStore {
                 AircraftSummary {
                     id: entry.key().clone(),
                     config: series.config.clone(),
-                    time_range: series
-                        .states
-                        .first()
-                        .zip(series.states.last())
-                        .map(|(first, last)| (first.timestamp_secs, last.timestamp_secs)),
+                    time_range: aircraft_time_range(series),
                     state_count: series.states.len(),
                     event_count: series.events.len(),
+                    telemetry_count: series.telemetry.len(),
                 }
             })
             .collect();
@@ -650,11 +782,13 @@ impl TimeSeriesStore {
         }
         drop(other_data);
         *write_unpoisoned(&self.data) = replacement;
+        self.live_state_receipts.clear();
     }
 
     /// Remove all in-memory data.
     pub fn clear(&self) {
         *write_unpoisoned(&self.data) = DashMap::new();
+        self.live_state_receipts.clear();
     }
 
     /// Persist the store to disk at the given directory path.
@@ -665,6 +799,7 @@ impl TimeSeriesStore {
         self.write_meta(path)?;
         self.write_states_parquet(path)?;
         self.write_events_parquet(path)?;
+        self.write_telemetry_parquet(path)?;
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), aircraft_count = self.get_aircraft_ids().len(), "store save completed");
         Ok(())
     }
@@ -675,6 +810,7 @@ impl TimeSeriesStore {
         let loaded = Self::new();
         loaded.read_states_parquet(path)?;
         loaded.read_events_parquet(path)?;
+        loaded.read_telemetry_parquet(path)?;
         loaded.read_meta(path)?;
         self.replace_from(&loaded);
         info!(target: "fly_ruler_proto_core.store", path = %path.display(), aircraft_count = self.get_aircraft_ids().len(), "store load completed");
@@ -687,11 +823,7 @@ impl TimeSeriesStore {
         for item in &*data {
             let id = item.key().clone();
             let series = item.value();
-            let time_range = series
-                .states
-                .first()
-                .zip(series.states.last())
-                .map(|(a, b)| (a.timestamp_secs, b.timestamp_secs));
+            let time_range = aircraft_time_range(series);
 
             aircrafts.push(MetaAircraft {
                 id,
@@ -726,7 +858,16 @@ impl TimeSeriesStore {
             let data = read_unpoisoned(&self.data);
             if let Some(mut series) = data.get_mut(&entry.id) {
                 if let (Some(name), Some(toml_config)) = (entry.name, entry.toml_config) {
-                    series.config = Some(AircraftConfig { name, toml_config });
+                    let telemetry_schemas = series
+                        .config
+                        .as_ref()
+                        .map(|config| config.telemetry_schemas.clone())
+                        .unwrap_or_default();
+                    series.config = Some(AircraftConfig {
+                        name,
+                        toml_config,
+                        telemetry_schemas,
+                    });
                 }
             };
         }
@@ -813,6 +954,38 @@ impl TimeSeriesStore {
         Ok(())
     }
 
+    fn write_telemetry_parquet(&self, path: &Path) -> Result<(), StoreError> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("aircraft_id", DataType::Utf8, false),
+            Field::new("timestamp", DataType::Float64, false),
+            Field::new("frame_payload", DataType::Binary, false),
+        ]));
+        let mut ids = Vec::<String>::new();
+        let mut timestamps = Vec::<f64>::new();
+        let mut payloads = Vec::<Vec<u8>>::new();
+        let data = read_unpoisoned(&self.data);
+        for item in &*data {
+            for sample in &item.value().telemetry {
+                ids.push(item.key().clone());
+                timestamps.push(sample.timestamp_secs);
+                payloads.push(sample.frame.encode_to_vec());
+            }
+        }
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(ids)),
+                Arc::new(Float64Array::from(timestamps)),
+                Arc::new(BinaryArray::from_iter_values(payloads)),
+            ],
+        )?;
+        let file = File::create(path.join("telemetry.parquet"))?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(())
+    }
+
     fn read_states_parquet(&self, path: &Path) -> Result<(), StoreError> {
         let file_path = path.join("states.parquet");
         if !file_path.exists() {
@@ -869,6 +1042,116 @@ impl TimeSeriesStore {
 
         Ok(())
     }
+
+    fn read_telemetry_parquet(&self, path: &Path) -> Result<(), StoreError> {
+        let file_path = path.join("telemetry.parquet");
+        if !file_path.exists() {
+            return Ok(());
+        }
+        let file = File::open(file_path)?;
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)?
+            .with_batch_size(1024)
+            .build()?;
+        for maybe_batch in &mut reader {
+            let batch = maybe_batch?;
+            let ids = as_string_array(batch.column(0), "aircraft_id")?;
+            let timestamps = as_f64_array(batch.column(1), "timestamp")?;
+            let payloads = as_binary_array(batch.column(2), "frame_payload")?;
+            for index in 0..batch.num_rows() {
+                self.append_telemetry(
+                    ids.value(index).to_string(),
+                    timestamps.value(index),
+                    pb::TelemetryFrame::decode(payloads.value(index))?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_telemetry_schemas(schemas: &[pb::TelemetryStreamSchema]) -> Result<(), StoreError> {
+    let mut stream_ids = BTreeSet::new();
+    for schema in schemas {
+        if schema.stream_id.trim().is_empty() || !stream_ids.insert(&schema.stream_id) {
+            return Err(StoreError::InvalidData(format!(
+                "telemetry stream id must be non-empty and unique: {:?}",
+                schema.stream_id
+            )));
+        }
+        if schema
+            .nominal_rate_hz
+            .is_some_and(|rate| !rate.is_finite() || rate <= 0.0)
+        {
+            return Err(StoreError::InvalidData(format!(
+                "telemetry stream {} has invalid nominal rate",
+                schema.stream_id
+            )));
+        }
+        let mut field_ids = BTreeSet::new();
+        for field in &schema.fields {
+            if field.field_id.trim().is_empty() || !field_ids.insert(&field.field_id) {
+                return Err(StoreError::InvalidData(format!(
+                    "telemetry field id must be non-empty and unique in stream {}: {:?}",
+                    schema.stream_id, field.field_id
+                )));
+            }
+            if !matches!(
+                pb::TelemetryValueType::try_from(field.value_type),
+                Ok(kind) if kind != pb::TelemetryValueType::Unspecified
+            ) {
+                return Err(StoreError::InvalidData(format!(
+                    "telemetry field {} has invalid value type",
+                    field.field_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_telemetry_frame(
+    schemas: &[pb::TelemetryStreamSchema],
+    frame: &pb::TelemetryFrame,
+) -> Result<(), StoreError> {
+    let schema = schemas
+        .iter()
+        .find(|schema| schema.stream_id == frame.stream_id)
+        .ok_or_else(|| {
+            StoreError::InvalidData(format!("unknown telemetry stream: {}", frame.stream_id))
+        })?;
+    if frame.values.len() != schema.fields.len() {
+        return Err(StoreError::InvalidData(format!(
+            "telemetry stream {} expects {} values, got {}",
+            frame.stream_id,
+            schema.fields.len(),
+            frame.values.len()
+        )));
+    }
+    for (field, value) in schema.fields.iter().zip(&frame.values) {
+        let valid = matches!(
+            (
+                pb::TelemetryValueType::try_from(field.value_type),
+                value.kind.as_ref()
+            ),
+            (
+                Ok(pb::TelemetryValueType::F64),
+                Some(pb::telemetry_value::Kind::F64Value(_))
+            ) | (
+                Ok(pb::TelemetryValueType::I64),
+                Some(pb::telemetry_value::Kind::I64Value(_))
+            ) | (
+                Ok(pb::TelemetryValueType::Bool),
+                Some(pb::telemetry_value::Kind::BoolValue(_))
+            )
+        );
+        if !valid {
+            return Err(StoreError::InvalidData(format!(
+                "telemetry field {} has a mismatched value type",
+                field.field_id
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -887,6 +1170,26 @@ fn page_slice<T: Clone>(items: &[T], offset: usize, limit: usize) -> StorePage<T
         offset,
         limit,
     }
+}
+
+fn aircraft_time_range(series: &AircraftTimeSeries) -> Option<(f64, f64)> {
+    let first = series
+        .states
+        .first()
+        .map(|sample| sample.timestamp_secs)
+        .into_iter()
+        .chain(series.events.first().map(|event| event.timestamp_secs))
+        .chain(series.telemetry.first().map(|frame| frame.timestamp_secs))
+        .min_by(f64::total_cmp)?;
+    let last = series
+        .states
+        .last()
+        .map(|sample| sample.timestamp_secs)
+        .into_iter()
+        .chain(series.events.last().map(|event| event.timestamp_secs))
+        .chain(series.telemetry.last().map(|frame| frame.timestamp_secs))
+        .max_by(f64::total_cmp)?;
+    Some((first, last))
 }
 
 fn read_unpoisoned<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
@@ -960,6 +1263,12 @@ pub fn state_count_for(store: &TimeSeriesStore) -> usize {
     data.iter().map(|entry| entry.value().states.len()).sum()
 }
 
+/// Return the total number of telemetry frames across all aircraft.
+pub fn telemetry_count_for(store: &TimeSeriesStore) -> usize {
+    let data = read_unpoisoned(&store.data);
+    data.iter().map(|entry| entry.value().telemetry.len()).sum()
+}
+
 /// Return the number of distinct aircraft currently in the store.
 pub fn aircraft_count_for(store: &TimeSeriesStore) -> usize {
     read_unpoisoned(&store.data).iter().count()
@@ -979,6 +1288,7 @@ pub fn active_time_bounds(store: &TimeSeriesStore) -> Option<(f64, f64)> {
             .map(|state| state.timestamp_secs)
             .into_iter()
             .chain(series.events.first().map(|event| event.timestamp_secs))
+            .chain(series.telemetry.first().map(|frame| frame.timestamp_secs))
             .min_by(f64::total_cmp);
         let last = series
             .states
@@ -986,6 +1296,7 @@ pub fn active_time_bounds(store: &TimeSeriesStore) -> Option<(f64, f64)> {
             .map(|state| state.timestamp_secs)
             .into_iter()
             .chain(series.events.last().map(|event| event.timestamp_secs))
+            .chain(series.telemetry.last().map(|frame| frame.timestamp_secs))
             .max_by(f64::total_cmp);
         if let (Some(first), Some(last)) = (first, last) {
             min_start = Some(match min_start {
@@ -1028,8 +1339,29 @@ mod tests {
             }),
             derived: None,
             control_surfaces: None,
-            engines: vec![],
-            custom_fields: vec![],
+            linear_acceleration_body: None,
+            propulsors: vec![],
+        }
+    }
+
+    fn state_message(timestamp: f64, state: pb::AircraftState) -> pb::Message {
+        pb::Message {
+            envelope: Some(pb::message::Envelope::Request(pb::Request {
+                id: None,
+                timestamp,
+                command: Some(pb::RequestCommand {
+                    kind: Some(pb::request_command::Kind::AircraftEvent(
+                        pb::AircraftEvent {
+                            aircraft_id: Some(pb::Uuid {
+                                value: vec![0x11; 16],
+                            }),
+                            info: Some(pb::AircraftCommandInfo {
+                                kind: Some(pb::aircraft_command_info::Kind::StateUpdate(state)),
+                            }),
+                        },
+                    )),
+                }),
+            })),
         }
     }
 
@@ -1049,10 +1381,138 @@ mod tests {
     }
 
     #[test]
+    fn live_freshness_uses_receipt_time_not_source_timeline() {
+        let store = TimeSeriesStore::new();
+        let id = "11".repeat(16);
+        store.append_message(state_message(0.0, mk_state(1.0)));
+
+        assert!(!store.live_state_is_stale(&id, Duration::from_secs(60)));
+        assert_eq!(store.get_latest(&id).unwrap().timestamp_secs, 0.0);
+
+        store.clear();
+        assert!(store.live_state_is_stale(&id, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn non_finite_source_timestamp_does_not_create_live_freshness() {
+        let store = TimeSeriesStore::new();
+        let id = "11".repeat(16);
+        store.append_message(state_message(f64::NAN, mk_state(1.0)));
+        store.append_state(id.clone(), f64::INFINITY, mk_state(2.0));
+        store.append_event(
+            id.clone(),
+            f64::NEG_INFINITY,
+            Event::Custom("bad".to_string()),
+        );
+
+        assert!(store.get_latest(&id).is_none());
+        assert!(store
+            .get_events_range(&id, f64::NEG_INFINITY, f64::INFINITY)
+            .is_none());
+        assert!(store.live_state_age(&id).is_none());
+    }
+
+    #[test]
+    fn telemetry_schema_and_frame_validation_are_strict() {
+        let duplicate = pb::TelemetryStreamSchema {
+            stream_id: "controller".to_string(),
+            name: String::new(),
+            nominal_rate_hz: Some(100.0),
+            fields: vec![
+                pb::TelemetryField {
+                    field_id: "controller.error".to_string(),
+                    value_type: pb::TelemetryValueType::F64 as i32,
+                    ..Default::default()
+                },
+                pb::TelemetryField {
+                    field_id: "controller.error".to_string(),
+                    value_type: pb::TelemetryValueType::F64 as i32,
+                    ..Default::default()
+                },
+            ],
+        };
+        assert!(validate_telemetry_schemas(&[duplicate]).is_err());
+
+        let store = TimeSeriesStore::new();
+        store.append_event(
+            "a1".to_string(),
+            0.0,
+            Event::Spawn(Box::new(pb::AircraftSpawnInfo {
+                name: "test".to_string(),
+                toml_config: String::new(),
+                initial_state: None,
+                telemetry_schemas: vec![pb::TelemetryStreamSchema {
+                    stream_id: "runtime".to_string(),
+                    name: String::new(),
+                    nominal_rate_hz: None,
+                    fields: vec![pb::TelemetryField {
+                        field_id: "runtime.healthy".to_string(),
+                        value_type: pb::TelemetryValueType::Bool as i32,
+                        ..Default::default()
+                    }],
+                }],
+            })),
+        );
+        let wrong_type = pb::TelemetryFrame {
+            stream_id: "runtime".to_string(),
+            sequence: 1,
+            values: vec![pb::TelemetryValue {
+                kind: Some(pb::telemetry_value::Kind::F64Value(1.0)),
+            }],
+        };
+        assert!(store
+            .append_telemetry("a1".to_string(), 1.0, wrong_type)
+            .is_err());
+        let unknown = pb::TelemetryFrame {
+            stream_id: "unknown".to_string(),
+            sequence: 1,
+            values: Vec::new(),
+        };
+        assert!(store
+            .append_telemetry("a1".to_string(), 1.0, unknown)
+            .is_err());
+    }
+
+    #[test]
     fn save_and_load_roundtrip_works() {
         let store = TimeSeriesStore::new();
         store.append_state("a1".to_string(), 1.0, mk_state(10.0));
         store.append_event("a1".to_string(), 1.5, Event::Custom("evt".to_string()));
+        store.append_event(
+            "a1".to_string(),
+            0.5,
+            Event::Spawn(Box::new(pb::AircraftSpawnInfo {
+                name: "test".to_string(),
+                toml_config: String::new(),
+                initial_state: None,
+                telemetry_schemas: vec![pb::TelemetryStreamSchema {
+                    stream_id: "runtime".to_string(),
+                    name: "Runtime".to_string(),
+                    nominal_rate_hz: None,
+                    fields: vec![pb::TelemetryField {
+                        field_id: "runtime.realtime_factor".to_string(),
+                        label: String::new(),
+                        group: String::new(),
+                        unit: String::new(),
+                        description: String::new(),
+                        value_type: pb::TelemetryValueType::F64 as i32,
+                    }],
+                }],
+            })),
+        );
+        store
+            .append_telemetry(
+                "a1".to_string(),
+                1.25,
+                pb::TelemetryFrame {
+                    stream_id: "runtime".to_string(),
+                    sequence: 1,
+                    values: vec![pb::TelemetryValue {
+                        kind: Some(pb::telemetry_value::Kind::F64Value(1.0)),
+                    }],
+                },
+            )
+            .unwrap();
 
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1066,7 +1526,8 @@ mod tests {
         restored.load_from_disk(&dir).unwrap();
 
         assert_eq!(state_count_for(&restored), 1);
-        assert_eq!(event_count_for(&restored), 1);
+        assert_eq!(event_count_for(&restored), 2);
+        assert_eq!(telemetry_count_for(&restored), 1);
         assert_eq!(aircraft_count_for(&restored), 1);
 
         let _ = fs::remove_dir_all(dir);
@@ -1115,6 +1576,7 @@ mod tests {
             name: "F-16".to_string(),
             toml_config: "[aircraft]\nname='F-16'".to_string(),
             initial_state: Some(mk_state(0.0)),
+            telemetry_schemas: Vec::new(),
         };
         store.append_event("a1".to_string(), 1.0, Event::Spawn(Box::new(spawn)));
 

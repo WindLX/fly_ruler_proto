@@ -5,7 +5,7 @@
 //! ## Usage
 //! ```python
 //! from fly_ruler_proto_python import (
-//!     PyClient, AircraftState, Vector3, Quaternion
+//!     PyClient, AircraftState, Vector3, Attitude
 //! )
 //!
 //! client = PyClient("127.0.0.1:18002")
@@ -36,10 +36,13 @@ pub use protocol::*;
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Core state types
     m.add_class::<PyVector3>()?;
-    m.add_class::<PyQuaternion>()?;
+    m.add_class::<PyAttitude>()?;
     m.add_class::<PyDerivedState>()?;
     m.add_class::<PyControlSurfaceState>()?;
-    m.add_class::<PyEngineState>()?;
+    m.add_class::<PyPropulsorState>()?;
+    m.add_class::<PyTelemetryValueType>()?;
+    m.add_class::<PyTelemetryField>()?;
+    m.add_class::<PyTelemetryStreamSchema>()?;
     m.add_class::<PyAircraftState>()?;
 
     // Networking client/server

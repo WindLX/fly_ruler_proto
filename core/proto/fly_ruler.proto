@@ -32,6 +32,11 @@ message DerivedState {
   optional double ias  = 10;
   optional double cas  = 11;
   optional double mach = 12;
+  optional double ground_speed = 13;
+  // Positive upward in meters/second.
+  optional double vertical_speed = 14;
+  optional double dynamic_pressure = 15;
+  optional double normal_load_factor = 16;
 }
 
 message ControlSurfaceState {
@@ -44,24 +49,60 @@ message ControlSurfaceState {
   optional double spoilers_ratio    = 7;
 }
 
-message EngineState {
-  uint32 index = 1;
-  optional double throttle_lever_ratio = 2;
+enum PropulsorKind {
+  PROPULSOR_KIND_UNSPECIFIED = 0;
+  PROPULSOR_KIND_JET         = 1;
+  PROPULSOR_KIND_PROPELLER   = 2;
+  PROPULSOR_KIND_ROTOR       = 3;
 }
 
-message FieldValue {
+message PropulsorState {
+  string         propulsor_id        = 1;
+  PropulsorKind kind                 = 2;
+  optional double throttle_ratio     = 3;
+  optional double rpm                = 4;
+  optional double blade_pitch_rad    = 5;
+  optional double thrust_newton      = 6;
+  optional double torque_newton_meter = 7;
+  // Optional consumer slot. MSFS maps indices 1 through 4 to engine slots.
+  optional uint32 index               = 8;
+}
+
+enum TelemetryValueType {
+  TELEMETRY_VALUE_TYPE_UNSPECIFIED = 0;
+  TELEMETRY_VALUE_TYPE_F64         = 1;
+  TELEMETRY_VALUE_TYPE_I64         = 2;
+  TELEMETRY_VALUE_TYPE_BOOL        = 3;
+}
+
+message TelemetryField {
+  string             field_id    = 1;
+  string             label       = 2;
+  string             group       = 3;
+  string             unit        = 4;
+  string             description = 5;
+  TelemetryValueType value_type  = 6;
+}
+
+message TelemetryStreamSchema {
+  string                  stream_id       = 1;
+  string                  name            = 2;
+  optional double         nominal_rate_hz = 3;
+  repeated TelemetryField fields          = 4;
+}
+
+message TelemetryValue {
   oneof kind {
-    double f64_value    = 1;
-    int64  i64_value    = 2;
-    bool   bool_value   = 3;
-    string string_value = 4;
-    bytes  bytes_value  = 5;
+    double f64_value  = 1;
+    int64  i64_value  = 2;
+    bool   bool_value = 3;
   }
 }
 
-message CustomField {
-  string     field_id = 1;
-  FieldValue value    = 2;
+message TelemetryFrame {
+  string                  stream_id = 1;
+  uint64                  sequence  = 2;
+  repeated TelemetryValue values    = 3;
 }
 
 message AircraftState {
@@ -71,15 +112,17 @@ message AircraftState {
   Quaternion           attitude         = 3;
   Vector3              angular_velocity = 4;
   DerivedState         derived          = 5;
-  repeated CustomField custom_fields    = 6;
   ControlSurfaceState  control_surfaces = 7;
-  repeated EngineState engines          = 8;
+  // Body-FRD acceleration in meters/second^2.
+  Vector3              linear_acceleration_body = 9;
+  repeated PropulsorState propulsors    = 10;
 }
 
 message AircraftSpawnInfo {
   string        name          = 1;
   string        toml_config   = 2;
   AircraftState initial_state = 3;
+  repeated TelemetryStreamSchema telemetry_schemas = 4;
 }
 
 message DespawnInfo {
@@ -92,6 +135,7 @@ message AircraftCommandInfo {
     DespawnInfo       despawn      = 2;
     AircraftState     state_update = 3;
     string            custom_event = 4;
+    TelemetryFrame    telemetry_frame = 5;
   }
 }
 
@@ -120,6 +164,8 @@ message RequestCommand {
 
 message Request {
   Uuid           id        = 1;
+  // Finite seconds on the producer-defined source timeline. Producers may use
+  // Unix time or a simulation clock, but one session must use a consistent base.
   double         timestamp = 2;
   RequestCommand command   = 3;
 }
@@ -138,6 +184,8 @@ enum ErrorCode {
   UNKNOWN_FIELD             = 3;
   PROTOCOL_VERSION_MISMATCH = 4;
   INVALID_STATE             = 5;
+  INVALID_TELEMETRY_SCHEMA  = 6;
+  INVALID_TELEMETRY_FRAME   = 7;
 }
 
 message ResponseError {
@@ -148,6 +196,7 @@ message ResponseError {
 
 message Response {
   Uuid   id        = 1;
+  // Echoes the request source-timeline timestamp when available.
   double timestamp = 2;
   oneof result {
     ResponseData  ok  = 3;

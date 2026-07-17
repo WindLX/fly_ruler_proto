@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
@@ -25,6 +25,7 @@ pub struct Session {
     pub client_uuid_hex: String,
     /// Last seen timestamp in seconds since the Unix epoch.
     pub last_seen_secs: f64,
+    last_seen_at: Instant,
 }
 
 impl Session {
@@ -34,13 +35,18 @@ impl Session {
             addr,
             client_uuid_hex,
             last_seen_secs: now_secs(),
+            last_seen_at: Instant::now(),
         }
     }
 
     /// Return true if the session has been inactive longer than `timeout_secs`.
     pub fn is_expired(&self, timeout_secs: f64) -> bool {
-        let now = now_secs();
-        self.last_seen_secs + timeout_secs < now
+        let timeout = if timeout_secs.is_finite() && timeout_secs > 0.0 {
+            Duration::from_secs_f64(timeout_secs)
+        } else {
+            Duration::ZERO
+        };
+        self.last_seen_at.elapsed() > timeout
     }
 }
 
@@ -111,6 +117,7 @@ impl SessionState {
         let mut by_addr = self.by_addr.lock().await;
         if let Some(s) = by_addr.get_mut(&addr) {
             s.last_seen_secs = now_secs();
+            s.last_seen_at = Instant::now();
         }
     }
 
@@ -128,6 +135,7 @@ impl SessionState {
                 addr,
                 client_uuid_hex: client_uuid,
                 last_seen_secs: now_secs(),
+                last_seen_at: Instant::now(),
             },
         );
     }
@@ -146,14 +154,12 @@ impl SessionState {
     }
 
     async fn cleanup_expired(&self, timeout: Duration) {
-        let deadline = now_secs() - timeout.as_secs_f64();
-
         let expired: Vec<(SocketAddr, String)> = {
             let by_addr = self.by_addr.lock().await;
             by_addr
                 .iter()
                 .filter_map(|(addr, sess)| {
-                    if sess.last_seen_secs < deadline {
+                    if sess.last_seen_at.elapsed() > timeout {
                         Some((*addr, sess.client_uuid_hex.clone()))
                     } else {
                         None
@@ -408,5 +414,19 @@ impl ServerRuntime {
     /// Return the local socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
         self.server.local_addr()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_expiry_uses_monotonic_activity_not_wall_clock_value() {
+        let addr = "127.0.0.1:18002".parse().unwrap();
+        let mut session = Session::new(addr, "client".to_string());
+        session.last_seen_secs = 0.0;
+
+        assert!(!session.is_expired(60.0));
     }
 }

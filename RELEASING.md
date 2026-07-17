@@ -18,6 +18,8 @@ The release workflow builds and uploads:
 
 The Web console is built once by the `build-web` job. Its `web/dist` artifact is then consumed by both the Linux server and MSFS jobs, so the two bundles contain the exact same tested frontend.
 
+The Linux server bundle also contains `fly-ruler-server.example.toml`. Copy it to `fly-ruler-server.toml` to configure the daemon without changing launch arguments.
+
 ## MSFS bundle contract
 
 The MSFS archive is self-contained:

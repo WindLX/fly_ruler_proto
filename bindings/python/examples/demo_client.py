@@ -14,7 +14,7 @@ import signal
 import time
 from dataclasses import dataclass
 
-from fly_ruler_proto_python import FlyRulerClient, create_aircraft_state
+from fly_ruler_proto_python import Attitude, FlyRulerClient, create_aircraft_state
 
 
 @dataclass
@@ -45,7 +45,7 @@ def build_state(elapsed_s: float, cfg: MotionConfig):
     return create_aircraft_state(
         position=(x, y, z),
         velocity=(vx, vy, vz),
-        attitude=(qw, 0.0, 0.0, qz),
+        attitude=Attitude.from_quaternion((qw, 0.0, 0.0, qz)),
         angular_velocity=(0.0, 0.0, omega),
     )
 

@@ -6,6 +6,8 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 
+/// Validated aircraft attitude and rotation operations.
+pub mod attitude;
 /// Runtime configuration types.
 pub mod config;
 /// Kernel orchestration and server lifecycle.
@@ -25,11 +27,14 @@ pub mod transport;
 pub(crate) mod utils;
 
 /// Protocol semantic version shared across core and language bindings.
-pub const PROTOCOL_VERSION: &str = "0.2.4";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 // Re-export commonly used types
+pub use attitude::{Attitude, AttitudeError};
 pub use config::{
-    LoggingConfig, ManagementConfig, ReplayConfig, RuntimeConfig, StoreConfig, TransportConfig,
+    LoggingConfig, LoggingFileConfig, ManagementConfig, ManagementFileConfig, PlaybackFileConfig,
+    ReplayConfig, RuntimeConfig, RuntimeFileConfig, StoreConfig, TransportConfig,
+    TransportFileConfig, RUNTIME_CONFIG_SCHEMA_VERSION,
 };
 pub use kernel::{KernelRuntime, RuntimeError};
 pub use logging::init_logging;
@@ -42,7 +47,7 @@ pub use playback::{
 };
 pub use store::{
     AircraftConfig, AircraftId, AircraftSummary, AircraftTimeSeries, Event, StoreError, StorePage,
-    TimeSeriesStore, TimestampedEvent, TimestampedState,
+    TimeSeriesStore, TimestampedEvent, TimestampedState, TimestampedTelemetryFrame,
 };
 pub use transport::{
     AircraftClient, Client, Server, ServerRuntime, Session, SessionHandle, TransportError,

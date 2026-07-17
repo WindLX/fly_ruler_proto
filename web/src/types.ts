@@ -17,6 +17,7 @@ export interface StoreStats {
   aircraft_count: number
   state_count: number
   event_count: number
+  telemetry_count?: number
   time_bounds: [number, number] | null
 }
 
@@ -41,18 +42,28 @@ export interface AircraftSummary {
   time_range: [number, number] | null
   state_count: number
   event_count: number
+  telemetry_count?: number
   spawned_at_cursor: boolean
 }
 
 export interface AircraftState {
   position?: Vector3 | null
   velocity?: Vector3 | null
-  attitude?: Quaternion | null
+  attitude?: Attitude | null
   angular_velocity?: Vector3 | null
   derived?: Record<string, number | null> | null
   control_surfaces?: Record<string, number | null> | null
-  engines: Array<{ index: number; throttle_lever_ratio: number | null }>
-  custom_fields: Record<string, { kind: string; value: unknown }>
+  linear_acceleration_body?: Vector3 | null
+  propulsors?: Array<{
+    propulsor_id: string
+    kind: number
+    throttle_ratio: number | null
+    rpm: number | null
+    blade_pitch_rad: number | null
+    thrust_newton: number | null
+    torque_newton_meter: number | null
+    index: number | null
+  }>
 }
 
 export interface Vector3 {
@@ -61,11 +72,14 @@ export interface Vector3 {
   z: number
 }
 
-export interface Quaternion {
+export interface Attitude {
   w: number
   x: number
   y: number
   z: number
+  roll: number | null
+  pitch: number | null
+  yaw: number | null
 }
 
 export interface TimestampedState {
@@ -83,8 +97,12 @@ export interface AircraftEvent {
 
 export type SeriesSelector =
   | { kind: 'standard'; path: string }
-  | { kind: 'engine_throttle'; index: number }
-  | { kind: 'custom'; field_id: string }
+  | {
+      kind: 'propulsor'
+      propulsor_id: string
+      field: 'throttle_ratio' | 'rpm' | 'blade_pitch_rad' | 'thrust_newton' | 'torque_newton_meter'
+    }
+  | { kind: 'telemetry'; stream_id: string; field_id: string }
 
 export interface SeriesCatalogItem {
   selector: SeriesSelector

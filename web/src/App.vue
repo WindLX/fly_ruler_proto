@@ -24,14 +24,19 @@ const allCurves = computed(() => [
 ])
 
 onMounted(async () => {
-  await Promise.all([server.refresh(), workspace.load()])
+  server.connect()
+  const [serverResult, workspaceResult] = await Promise.allSettled([
+    server.refresh(),
+    workspace.load(),
+  ])
+  if (workspaceResult.status === 'rejected') server.reportError(workspaceResult.reason)
+  if (serverResult.status === 'rejected' || workspaceResult.status === 'rejected') return
   workspace.reconcileDataContext(
     server.aircraft.map((aircraft) => aircraft.id),
     server.playback?.bounds ?? null,
   )
   locale.value = workspace.workspace.locale
   document.documentElement.dataset.theme = workspace.workspace.theme
-  server.connect()
 })
 
 onBeforeUnmount(server.stop)
@@ -77,12 +82,13 @@ watch(
 watch(
   () => server.snapshotSequence,
   () => {
-    series.mergeLiveSamples(
-      allCurves.value,
-      server.samples,
-      workspace.workspace.max_points,
-      server.playback?.mode === 'live',
-    )
+    if (server.playback?.mode === 'live') {
+      void series.catchUpLiveCurves(
+        allCurves.value,
+        server.playback.bounds,
+        workspace.workspace.max_points,
+      )
+    }
   },
 )
 

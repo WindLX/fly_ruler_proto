@@ -12,8 +12,10 @@ const UNIX_TIMESTAMP_THRESHOLD = 946_684_800
 
 export function selectorKey(selector: SeriesSelector): string {
   if (selector.kind === 'standard') return `standard:${selector.path}`
-  if (selector.kind === 'engine_throttle') return `engine_throttle:${selector.index}`
-  return `custom:${selector.field_id}`
+  if (selector.kind === 'propulsor') {
+    return `propulsor:${selector.propulsor_id}:${selector.field}`
+  }
+  return `telemetry:${selector.stream_id}:${selector.field_id}`
 }
 
 export function curveKey(curve: { aircraft_id: string; selector: SeriesSelector }): string {
@@ -311,16 +313,12 @@ function minorTickDivisions(step: number): number {
 }
 
 export function extractValue(state: AircraftState, selector: SeriesSelector): number | null {
-  if (selector.kind === 'engine_throttle') {
-    return (
-      state.engines.find((engine) => engine.index === selector.index)?.throttle_lever_ratio ?? null
-    )
-  }
-  if (selector.kind === 'custom') {
-    const value = state.custom_fields[selector.field_id]?.value
-    if (typeof value === 'number') return value
-    if (typeof value === 'boolean') return value ? 1 : 0
-    return null
+  if (selector.kind === 'telemetry') return null
+  if (selector.kind === 'propulsor') {
+    const value = state.propulsors?.find(
+      (propulsor) => propulsor.propulsor_id === selector.propulsor_id,
+    )?.[selector.field]
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
   }
   const segments = selector.path.split('.')
   let current: unknown = state

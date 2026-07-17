@@ -14,7 +14,7 @@
 | 传输层 | UDP（Tokio `UdpSocket`） |
 | 会话管理 | 应用层会话，基于 `client_uuid` + 握手/心跳维护 |
 | 序列化 | `prost` 生成 Rust 类型，运行时编码/解码 |
-| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "0.2.4"` |
+| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "0.3.0"` |
 
 ### 1.2 消息帧格式
 
@@ -68,8 +68,7 @@ fly_ruler_proto/
 
 ## 3. Protobuf 协议
 
-Schema 源文件：`proto/fly_ruler.proto`。`core/proto/fly_ruler.proto` 是随
-crate 发布的镜像；`build.rs` 在工作区构建时会校验两者完全一致。
+Schema 唯一源文件是 crate 内的 `proto/fly_ruler.proto`。它同时用于工作区代码生成和 crates.io 发布，不需要维护仓库级镜像。
 
 ### 3.1 基础几何/状态消息
 
@@ -112,9 +111,15 @@ message ControlSurfaceState {
   optional double spoilers_ratio    = 7;
 }
 
-message EngineState {
-  uint32 index = 1; // 从 1 开始
-  optional double throttle_lever_ratio = 2;
+message PropulsorState {
+  string propulsor_id = 1;
+  PropulsorKind kind = 2;
+  optional double throttle_ratio = 3;
+  optional double rpm = 4;
+  optional double blade_pitch_rad = 5;
+  optional double thrust_newton = 6;
+  optional double torque_newton_meter = 7;
+  optional uint32 index = 8;
 }
 
 message AircraftState {
@@ -124,11 +129,13 @@ message AircraftState {
   Quaternion           attitude         = 3;
   Vector3              angular_velocity = 4;
   DerivedState         derived          = 5;
-  repeated CustomField custom_fields    = 6;
   ControlSurfaceState  control_surfaces = 7;
-  repeated EngineState engines          = 8;
+  Vector3 linear_acceleration_body      = 9; // Body-FRD, m/s²
+  repeated PropulsorState propulsors    = 10;
 }
 ```
+
+实时曲线和多系统诊断使用独立的 schema-first telemetry 数据面。`AircraftSpawnInfo.telemetry_schemas` 在 spawn 时声明 stream 与标量字段，后续 `TelemetryFrame` 只按固定顺序传递 `f64/i64/bool` 值；Store 保留所有实际收到的 frame，并可在零样本时生成 series catalog。舵面、推进器和常用飞行状态进入标准 `AircraftState`，其他模型内部量进入 telemetry。
 
 ### 3.2 飞行器事件
 
@@ -137,6 +144,7 @@ message AircraftSpawnInfo {
   string        name          = 1;
   string        toml_config   = 2;
   AircraftState initial_state = 3;
+  repeated TelemetryStreamSchema telemetry_schemas = 4;
 }
 
 message DespawnInfo {
@@ -149,6 +157,7 @@ message AircraftCommandInfo {
     DespawnInfo       despawn      = 2;
     AircraftState     state_update = 3;
     string            custom_event = 4;
+    TelemetryFrame    telemetry_frame = 5;
   }
 }
 
@@ -224,12 +233,14 @@ message Message {
 }
 ```
 
+`Request.timestamp` 是生产者定义的有限源时间轴秒数。省略 timestamp 的高层客户端使用 Unix wall time；仿真客户端可以从 0 开始，但 spawn、state、telemetry、event 与 despawn 必须保持同一时间基准。Store、series 和 playback 原样保留源时间。Live freshness 独立使用服务端收到状态包时记录的本地单调时间，session heartbeat 过期也使用单调时间，因此系统墙钟跳变和零基仿真时间都不会造成错误 stale。
+
 ## 4. 核心模块说明
 
 ### 4.1 `lib.rs` — 公共 API 入口
 
 ```rust
-pub const PROTOCOL_VERSION: &str = "0.2.4";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 ```
 
 对外导出：
@@ -239,10 +250,7 @@ pub const PROTOCOL_VERSION: &str = "0.2.4";
 
 ### 4.2 `pb.rs` + `build.rs` — 代码生成
 
-`core/build.rs` 在工作区中从 `../proto/fly_ruler.proto` 生成 Rust 结构体；
-从 crates.io 安装时则使用 crate 内的 `proto/fly_ruler.proto` 镜像。工作区
-构建会先校验两个文件内容完全一致。生成结果在 `pb.rs` 中通过 `include!`
-嵌入：
+`core/build.rs` 始终从 crate 内的 `proto/fly_ruler.proto` 生成 Rust 结构体，因此工作区构建与 crates.io 发布使用同一份 schema。生成结果在 `pb.rs` 中通过 `include!` 嵌入：
 
 ```rust
 include!(concat!(env!("OUT_DIR"), "/flyruler.rs"));
@@ -420,6 +428,7 @@ pub struct AircraftTimeSeries {
 
 pub struct TimeSeriesStore {
     data: DashMap<AircraftId, AircraftTimeSeries>,
+    live_state_receipts: DashMap<AircraftId, Instant>,
 }
 ```
 
@@ -433,6 +442,9 @@ impl TimeSeriesStore {
     pub fn append_event(&self, id: AircraftId, timestamp_secs: f64, event: Event);
     pub fn append_message(&self, msg: pb::AircraftEvent);
     pub fn append_message_with_config(&self, msg: pb::AircraftEvent, config: Option<AircraftConfig>);
+
+    pub fn live_state_age(&self, id: &str) -> Option<Duration>;
+    pub fn live_state_is_stale(&self, id: &str, timeout: Duration) -> bool;
 
     pub fn get_latest(&self, id: &AircraftId) -> Option<TimestampedState>;
     pub fn get_state_at_or_before(&self, id: &AircraftId, at: f64) -> Option<TimestampedState>;
@@ -540,8 +552,7 @@ REST 根路径为 `/api/v1`：
 按全部飞机状态中的全局唯一时间戳跳转，event 按全部生命周期和 custom
 事件的全局唯一时间戳跳转；`count` 范围为 `1..=100`，操作后进入暂停回放。
 
-Series selector 使用带 `kind` 的 tagged JSON（`standard`、
-`engine_throttle`、`custom`），避免 custom field ID 中的点号产生歧义。
+Series selector 使用带 `kind` 的 tagged JSON（`standard`、`propulsor`、`telemetry`）；propulsor selector 由稳定 `propulsor_id` 和严格数值字段共同确定。
 一次查询最多 64 条曲线、每条 100–20,000 点；后端在完整区间统计后用
 LTTB 降采样。Workspace 保存在 `data_root/.fly-ruler/workspace.json`，
 每次更新递增 revision，并通知其他浏览器重新加载。
@@ -758,8 +769,7 @@ cargo test -p fly_ruler_proto_core
 
 - [Python 绑定](../bindings/python/README.md)
 - [项目总览](../AGENTS.md)
-- [Protobuf Schema](../proto/fly_ruler.proto)
-- [Crate 内 Schema 镜像](proto/fly_ruler.proto)
+- [Protobuf Schema](proto/fly_ruler.proto)
 
 The management implementation is split into dedicated gate, series, workspace,
 and HTTP runtime modules so persistence, replay control, and plotting queries

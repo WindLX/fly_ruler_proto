@@ -10,10 +10,12 @@ import time
 from dataclasses import dataclass
 
 from fly_ruler_proto_python import (
+    Attitude,
     ControlSurfaceState,
     DerivedState,
-    EngineState,
     FlyRulerClient,
+    PropulsorKind,
+    PropulsorState,
     create_aircraft_state,
 )
 
@@ -48,21 +50,15 @@ def build_state(elapsed_s: float, config: DemoConfig):
     quaternion = (math.cos(yaw * 0.5), 0.0, 0.0, math.sin(yaw * 0.5))
 
     control_phase = math.sin(phase)
-    controls = {
-        "flyruler.control.aileron_left_rad": 0.12 * control_phase,
-        "flyruler.control.aileron_right_rad": -0.12 * control_phase,
-        "flyruler.control.elevator_rad": 0.05 * math.sin(phase * 0.5),
-        "flyruler.control.rudder_rad": 0.08 * math.cos(phase),
-        "flyruler.control.flaps_left_ratio": 0.0,
-        "flyruler.control.flaps_right_ratio": 0.0,
-        "flyruler.control.spoilers_ratio": 0.0,
-    }
+    aileron = 0.12 * control_phase
+    elevator = 0.05 * math.sin(phase * 0.5)
+    rudder = 0.08 * math.cos(phase)
     throttle = 0.55 + 0.15 * math.sin(phase * 0.25)
 
     return create_aircraft_state(
         position=(north_m, east_m, -config.altitude_m),
         velocity=(velocity_north, velocity_east, 0.0),
-        attitude=quaternion,
+        attitude=Attitude.from_quaternion(quaternion),
         angular_velocity=(0.0, 0.0, omega),
         derived=DerivedState(
             lat=latitude,
@@ -73,19 +69,23 @@ def build_state(elapsed_s: float, config: DemoConfig):
             chi=yaw,
         ),
         control_surfaces=ControlSurfaceState(
-            aileron_left_rad=controls["flyruler.control.aileron_left_rad"],
-            aileron_right_rad=controls["flyruler.control.aileron_right_rad"],
-            elevator_rad=controls["flyruler.control.elevator_rad"],
-            rudder_rad=controls["flyruler.control.rudder_rad"],
+            aileron_left_rad=aileron,
+            aileron_right_rad=-aileron,
+            elevator_rad=elevator,
+            rudder_rad=rudder,
             flaps_left_ratio=0.0,
             flaps_right_ratio=0.0,
             spoilers_ratio=0.0,
         ),
-        engines=[
-            EngineState(index, throttle_lever_ratio=throttle)
+        propulsors=[
+            PropulsorState(
+                f"engine.{index}",
+                kind=PropulsorKind.JET,
+                throttle_ratio=throttle,
+                index=index,
+            )
             for index in range(1, config.engine_count + 1)
         ],
-        custom_fields=controls,
     )
 
 

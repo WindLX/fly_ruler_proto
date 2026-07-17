@@ -146,16 +146,18 @@ Planned improvements:
 
 ## 7. Non-Goals (Current Iteration)
 
-- No protocol schema breaking changes.
+- No additional protocol schema changes beyond the unreleased 0.3.0 cleanup.
 - No immediate switch to a different primary transport.
 - No hidden autosave behavior in core runtime.
 - No interpolation, reverse playback, looping, authentication, or server-side
   chart rendering.
-- No schema validation for `toml_config` or `custom_fields` in v1.
+- No schema validation for the opaque `toml_config`; telemetry schemas are validated at the client and server boundaries.
 
 ## 8. Compatibility Notes
 
-- Existing bindings should continue using the same high-level kernel/runtime operations.
-- Internal refactor should prefer additive changes (`with_config`, new config types) before removals.
+- Bindings use the same high-level kernel/runtime operations while exposing the final 0.3.0 state schema directly, without legacy state-field shims.
+- Future published protocol changes should prefer additive fields and reserve removed protobuf field numbers and names.
 - The MSFS binding is an out-of-process Windows sidecar. It reuses the UDP
   kernel under Proton and keeps SimConnect-specific FFI outside `core`.
+- The Godot binding embeds one `KernelRuntime` on a dedicated worker thread. Its `FlyRulerRuntime` node publishes immutable, playback-revision-consistent frame snapshots on the Godot main thread and embeds the same Web management console as the daemon and MSFS bridge.
+- Rendering interpolation, NED/FRD-to-engine coordinate conversion, model binding, HUD logic, and flight dynamics remain outside the Godot binding.

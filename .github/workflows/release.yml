@@ -66,6 +66,7 @@ jobs:
         run: |
           mkdir -p stage/fly-ruler-server/web
           cp target/release/fly-ruler-server stage/fly-ruler-server/
+          cp server/fly-ruler-server.example.toml stage/fly-ruler-server/
           cp -R web/dist stage/fly-ruler-server/web/
           cp server/README.md LICENSE RELEASING.md stage/fly-ruler-server/
           tar -C stage -czf fly-ruler-server-linux-x86_64.tar.gz fly-ruler-server
@@ -73,6 +74,8 @@ jobs:
         run: |
           tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
             | grep -Fx 'fly-ruler-server/fly-ruler-server'
+          tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
+            | grep -Fx 'fly-ruler-server/fly-ruler-server.example.toml'
           tar -tzf fly-ruler-server-linux-x86_64.tar.gz \
             | grep -Fx 'fly-ruler-server/web/dist/index.html'
           tar -tzf fly-ruler-server-linux-x86_64.tar.gz \

@@ -114,6 +114,27 @@ function aircraftLabel(id: string | undefined): string {
       <p v-else class="empty-copy">{{ t('inspector.noEvents') }}</p>
     </section>
 
+    <section class="editor-section">
+      <h2 class="editor-section-header">{{ t('inspector.performance') }}</h2>
+      <div class="editor-section-body">
+        <label class="field-label">
+          {{ t('inspector.maxPoints') }}
+          <select v-model.number="workspace.workspace.max_points" class="editor-select w-full">
+            <option
+              v-for="limit in [100, 250, 500, 1000, 2000, 5000, 10000, 20000]"
+              :key="limit"
+              :value="limit"
+            >
+              {{ t('inspector.pointsPerCurve', { count: limit }) }}
+            </option>
+          </select>
+        </label>
+        <p class="mt-2 text-[11px] leading-4 text-(--text-muted)">
+          {{ t('inspector.downsamplingHint') }}
+        </p>
+      </div>
+    </section>
+
     <section v-if="chart" class="editor-section">
       <h2 class="editor-section-header">{{ t('inspector.chart') }}</h2>
       <div class="editor-section-body">

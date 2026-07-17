@@ -425,7 +425,9 @@ watch(
         <span>{{ t('chart.aircraftUnavailable') }}</span>
       </div>
       <div v-else-if="pointCount === 0" class="chart-overlay">
-        <span>{{ t('chart.noPoints') }}</span>
+        <span>{{
+          server.playback?.mode === 'live' ? t('chart.waitingForSamples') : t('chart.noPoints')
+        }}</span>
         <span v-if="unavailableCount" class="text-[10px]">
           {{ t('chart.unavailableCurves', { count: unavailableCount }) }}
         </span>

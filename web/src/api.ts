@@ -93,7 +93,7 @@ export const api = {
   querySeries: (
     selections: SeriesSelection[],
     timeRange: { start: number; end: number } | null,
-    maxPoints: number,
+    maxPoints: number | null,
   ) =>
     apiFetch<{ series: SeriesData[] }>('/series/query', {
       method: 'POST',

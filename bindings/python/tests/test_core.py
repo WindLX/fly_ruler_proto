@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import pytest
+
 import fly_ruler_proto_python.client as client_module
 from fly_ruler_proto_python import (
     PROTOCOL_VERSION,
     AircraftState,
+    Attitude,
     ControlSurfaceState,
     DerivedState,
-    EngineState,
     FlyRulerClient,
-    Quaternion,
+    PropulsorKind,
+    PropulsorState,
+    TelemetryField,
+    TelemetryStreamSchema,
+    TelemetryValueType,
     Vector3,
     create_aircraft_state,
     get_protocol_version,
@@ -34,14 +40,30 @@ class TestVector3:
         assert (v.x, v.y, v.z) == (0.0, 0.0, 0.0)
 
 
-class TestQuaternion:
-    def test_create(self):
-        q = Quaternion(1.0, 0.0, 0.0, 0.0)
-        assert (q.w, q.x, q.y, q.z) == (1.0, 0.0, 0.0, 0.0)
-
+class TestAttitude:
     def test_identity(self):
-        q = Quaternion.identity()
-        assert (q.w, q.x, q.y, q.z) == (1.0, 0.0, 0.0, 0.0)
+        attitude = Attitude.identity()
+        assert attitude.quaternion == (1.0, 0.0, 0.0, 0.0)
+
+    def test_representations(self):
+        attitude = Attitude.from_euler((0.0, 0.0, 0.0))
+        assert attitude.rotation_matrix == (
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        )
+        assert Attitude.from_rotation_matrix(attitude.rotation_matrix).quaternion == (
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+        )
 
 
 class TestDerivedState:
@@ -79,13 +101,13 @@ class TestAircraftState:
         state = AircraftState.hover()
         assert state.position.x == 0.0
         assert state.velocity.x == 0.0
-        assert state.attitude.w == 1.0
+        assert state.attitude.quaternion[0] == 1.0
 
     def test_create_with_derived(self):
         state = AircraftState(
             position=Vector3(100.0, 200.0, -300.0),
             velocity=Vector3(1.0, 2.0, 3.0),
-            attitude=Quaternion(1.0, 0.0, 0.0, 0.0),
+            attitude=Attitude.identity(),
             angular_velocity=Vector3(0.1, 0.2, 0.3),
             derived=DerivedState(
                 lat=30.0,
@@ -104,41 +126,47 @@ class TestAircraftState:
         assert state.derived is not None
         assert state.derived.tas == 250.0
 
-    def test_custom_fields_round_trip_supported_types(self):
-        state = AircraftState(
-            custom_fields={
-                "float": 1.5,
-                "int": 3,
-                "bool": True,
-                "string": "ok",
-                "bytes": b"data",
-            }
-        )
-        assert state.custom_fields == {
-            "float": 1.5,
-            "int": 3,
-            "bool": True,
-            "string": "ok",
-            "bytes": b"data",
-        }
-        state.set_custom_field("float", 2.5)
-        assert state.custom_fields["float"] == 2.5
-
-    def test_standard_controls_and_engines(self):
+    def test_standard_controls_and_propulsors(self):
         state = AircraftState(
             control_surfaces=ControlSurfaceState(
                 elevator_rad=0.1,
                 flaps_left_ratio=0.5,
             ),
-            engines=[
-                EngineState(1, throttle_lever_ratio=0.25),
-                EngineState(2, throttle_lever_ratio=0.75),
+            propulsors=[
+                PropulsorState(
+                    "engine.left", kind=PropulsorKind.JET, index=1, throttle_ratio=0.25
+                ),
+                PropulsorState(
+                    "engine.right", kind=PropulsorKind.JET, index=2, throttle_ratio=0.75
+                ),
             ],
         )
         assert state.control_surfaces.elevator_rad == 0.1
         assert state.control_surfaces.flaps_left_ratio == 0.5
-        assert [engine.index for engine in state.engines] == [1, 2]
-        assert state.engines[1].throttle_lever_ratio == 0.75
+        assert [propulsor.index for propulsor in state.propulsors] == [1, 2]
+        assert state.propulsors[1].throttle_ratio == 0.75
+
+    def test_acceleration_and_propulsor_state(self):
+        state = create_aircraft_state(
+            linear_acceleration_body=(0.1, 0.2, -9.7),
+            propulsors=[
+                PropulsorState(
+                    "left_rotor",
+                    kind=PropulsorKind.ROTOR,
+                    throttle_ratio=0.6,
+                    rpm=2400.0,
+                    blade_pitch_rad=0.1,
+                    thrust_newton=120.0,
+                    torque_newton_meter=15.0,
+                    index=1,
+                )
+            ],
+        )
+        assert state.linear_acceleration_body.z == -9.7
+        assert state.propulsors[0].kind == PropulsorKind.ROTOR
+        assert state.propulsors[0].rpm == 2400.0
+        assert state.propulsors[0].index == 1
+        assert state.propulsors[0].thrust_newton == 120.0
 
 
 class TestHelpers:
@@ -146,26 +174,28 @@ class TestHelpers:
         state = create_aircraft_state(
             position=(1.0, 2.0, 3.0),
             velocity=(4.0, 5.0, 6.0),
-            attitude=(1.0, 0.1, 0.2, 0.3),
+            attitude=Attitude.from_quaternion((1.0, 0.1, 0.2, 0.3)),
             angular_velocity=(0.4, 0.5, 0.6),
             derived=DerivedState(31.2, 121.5, 1000.0),
             control_surfaces=ControlSurfaceState(rudder_rad=0.1),
-            engines=[EngineState(1, 0.4)],
-            custom_fields={"flyruler.control.rudder_rad": 0.1},
+            propulsors=[
+                PropulsorState(
+                    "engine", kind=PropulsorKind.JET, index=1, throttle_ratio=0.4
+                )
+            ],
         )
         assert state.position.x == 1.0
         assert state.velocity.y == 5.0
-        assert state.attitude.z == 0.3
+        assert state.attitude.quaternion[3] > 0.0
         assert state.angular_velocity.x == 0.4
         assert state.derived is not None
         assert state.control_surfaces.rudder_rad == 0.1
-        assert state.engines[0].throttle_lever_ratio == 0.4
-        assert state.custom_fields["flyruler.control.rudder_rad"] == 0.1
+        assert state.propulsors[0].throttle_ratio == 0.4
 
 
 class TestModuleApi:
     def test_protocol_version(self):
-        assert PROTOCOL_VERSION == "0.2.4"
+        assert PROTOCOL_VERSION == "0.3.0"
         assert get_protocol_version() == PROTOCOL_VERSION
 
 
@@ -181,12 +211,16 @@ class _FakePyClient:
         initial_state: AircraftState,
         toml_config: str,
         heartbeat_interval_secs: float,
+        telemetry_schemas: list[TelemetryStreamSchema],
+        spawn_timestamp: float | None,
     ) -> None:
         self.addr = addr
         self.aircraft_name = aircraft_name
         self.initial_state = initial_state
         self.toml_config = toml_config
         self.heartbeat_interval_secs = heartbeat_interval_secs
+        self.telemetry_schemas = telemetry_schemas
+        self.spawn_timestamp = spawn_timestamp
         self.closed = False
         self.calls: list[tuple] = []
         _FakePyClient.instances.append(self)
@@ -205,6 +239,14 @@ class _FakePyClient:
     def create_event(self, event_name: str, timestamp: float | None = None) -> None:
         self.calls.append(("create_event", event_name, timestamp))
 
+    def publish_telemetry(
+        self,
+        stream_id: str,
+        values: tuple[float | int | bool, ...],
+        timestamp: float | None = None,
+    ) -> None:
+        self.calls.append(("publish_telemetry", stream_id, values, timestamp))
+
     def despawn(
         self, reason: str | None = None, timestamp: float | None = None
     ) -> None:
@@ -220,29 +262,51 @@ class TestFlyRulerClient:
         _FakePyClient.instances.clear()
         monkeypatch.setattr(client_module, "PyClient", _FakePyClient)
 
+        schema = TelemetryStreamSchema(
+            "controller",
+            [
+                TelemetryField(
+                    "controller.pitch.error", value_type=TelemetryValueType.F64
+                ),
+                TelemetryField(
+                    "controller.saturated", value_type=TelemetryValueType.Bool
+                ),
+            ],
+            nominal_rate_hz=100.0,
+        )
         client = FlyRulerClient(
             "127.0.0.1:9000",
             "F-16",
             toml_config="[aircraft]\nname='F-16'",
             heartbeat_interval_secs=0.5,
+            telemetry_schemas=[schema],
+            spawn_timestamp=0.0,
         )
 
         inner = _FakePyClient.instances[-1]
         assert inner.addr == "127.0.0.1:9000"
         assert inner.aircraft_name == "F-16"
+        assert inner.spawn_timestamp == 0.0
         assert client.client_uuid == "fake-client-uuid"
         assert client.aircraft_uuid == "fake-aircraft-uuid"
 
         state = create_aircraft_state(position=(10.0, 20.0, -30.0))
         client.update_state(state, timestamp=123.0)
         client.create_event("missile_launch", timestamp=124.0)
+        client.publish_telemetry("controller", (0.25, True), timestamp=124.5)
         client.despawn(reason="done", timestamp=125.0)
         client.close()
 
         assert inner.calls[0][0] == "update_state"
         assert inner.calls[1] == ("create_event", "missile_launch", 124.0)
-        assert inner.calls[2] == ("despawn", "done", 125.0)
-        assert inner.calls[3] == ("close",)
+        assert inner.calls[2] == (
+            "publish_telemetry",
+            "controller",
+            (0.25, True),
+            124.5,
+        )
+        assert inner.calls[3] == ("despawn", "done", 125.0)
+        assert inner.calls[4] == ("close",)
 
     def test_context_manager_closes_once(self, monkeypatch):
         _FakePyClient.instances.clear()
@@ -254,3 +318,22 @@ class TestFlyRulerClient:
         inner = _FakePyClient.instances[-1]
         close_calls = [c for c in inner.calls if c[0] == "close"]
         assert len(close_calls) == 1
+
+    def test_rejects_non_finite_source_timestamps(self, monkeypatch):
+        _FakePyClient.instances.clear()
+        monkeypatch.setattr(client_module, "PyClient", _FakePyClient)
+
+        with pytest.raises(ValueError, match="spawn_timestamp must be finite"):
+            FlyRulerClient("127.0.0.1:9001", "quad", spawn_timestamp=float("nan"))
+
+        client = FlyRulerClient("127.0.0.1:9001", "quad", spawn_timestamp=0.0)
+        state = create_aircraft_state()
+        with pytest.raises(ValueError, match="timestamp must be finite"):
+            client.update_state(state, timestamp=float("inf"))
+        with pytest.raises(ValueError, match="timestamp must be finite"):
+            client.create_event("event", timestamp=float("nan"))
+        with pytest.raises(ValueError, match="timestamp must be finite"):
+            client.publish_telemetry("stream", (), timestamp=float("nan"))
+        with pytest.raises(ValueError, match="timestamp must be finite"):
+            client.despawn(timestamp=float("nan"))
+        client.close()

@@ -1,8 +1,8 @@
 //! Core data classes for Python bindings, aligned with protobuf schema.
 
-use fly_ruler_proto_core::pb;
+use fly_ruler_proto_core::{pb, Attitude};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyDict};
 
 /// 3D vector with `x`, `y`, `z` components.
 #[pyclass(from_py_object, name = "Vector3", get_all, set_all)]
@@ -48,54 +48,81 @@ impl PyVector3 {
     }
 }
 
-/// Quaternion with `w`, `x`, `y`, `z` components.
-#[pyclass(from_py_object, name = "Quaternion", get_all, set_all)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PyQuaternion {
-    /// Real component.
-    pub w: f64,
-    /// Imaginary i component.
-    pub x: f64,
-    /// Imaginary j component.
-    pub y: f64,
-    /// Imaginary k component.
-    pub z: f64,
-}
+/// Validated BODY-FRD to local-NED attitude.
+///
+/// Quaternions use Hamilton scalar-first `[w, x, y, z]`, rotation matrices
+/// are 3x3 row-major, and Euler angles are Z-Y-X `[roll, pitch, yaw]` in rad.
+#[pyclass(from_py_object, name = "Attitude", frozen)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PyAttitude(pub Attitude);
 
-impl From<PyQuaternion> for pb::Quaternion {
-    fn from(q: PyQuaternion) -> Self {
-        Self {
-            w: q.w,
-            x: q.x,
-            y: q.y,
-            z: q.z,
-        }
+impl From<PyAttitude> for pb::Quaternion {
+    fn from(attitude: PyAttitude) -> Self {
+        Self::from(&attitude.0)
     }
 }
 
 #[pymethods]
-impl PyQuaternion {
-    #[new]
-    fn new(w: f64, x: f64, y: f64, z: f64) -> Self {
-        Self { w, x, y, z }
-    }
-
-    /// Return the identity quaternion.
+impl PyAttitude {
+    /// Return the identity attitude.
     #[staticmethod]
     fn identity() -> Self {
-        Self {
-            w: 1.0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        }
+        Self(Attitude::identity())
+    }
+
+    /// Construct from Hamilton scalar-first `[w, x, y, z]` values.
+    #[staticmethod]
+    fn from_quaternion(values: Vec<f64>) -> PyResult<Self> {
+        let values: [f64; 4] = values
+            .try_into()
+            .map_err(|_| PyValueError::new_err("quaternion must contain exactly 4 values"))?;
+        Attitude::from_quaternion(values)
+            .map(Self)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Construct from a row-major 3x3 BODY-FRD to local-NED rotation matrix.
+    #[staticmethod]
+    fn from_rotation_matrix(values: Vec<f64>) -> PyResult<Self> {
+        let values: [f64; 9] = values
+            .try_into()
+            .map_err(|_| PyValueError::new_err("rotation matrix must contain exactly 9 values"))?;
+        Attitude::from_rotation_matrix(values)
+            .map(Self)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Construct from Z-Y-X `[roll, pitch, yaw]` Euler angles in radians.
+    #[staticmethod]
+    fn from_euler(values: Vec<f64>) -> PyResult<Self> {
+        let values: [f64; 3] = values
+            .try_into()
+            .map_err(|_| PyValueError::new_err("Euler angles must contain exactly 3 values"))?;
+        Attitude::from_euler(values)
+            .map(Self)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Return Hamilton scalar-first quaternion values.
+    #[getter]
+    fn quaternion(&self) -> (f64, f64, f64, f64) {
+        self.0.quaternion().into()
+    }
+
+    /// Return the row-major BODY-FRD to local-NED rotation matrix.
+    #[getter]
+    fn rotation_matrix(&self) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64) {
+        self.0.rotation_matrix().into()
+    }
+
+    /// Return Z-Y-X `[roll, pitch, yaw]` Euler angles in radians.
+    #[getter]
+    fn euler(&self) -> (f64, f64, f64) {
+        self.0.euler().into()
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "Quaternion(w={}, x={}, y={}, z={})",
-            self.w, self.x, self.y, self.z
-        )
+        format!("Attitude(quaternion={:?})", self.0.quaternion())
     }
 }
 
@@ -127,6 +154,14 @@ pub struct PyDerivedState {
     pub cas: Option<f64>,
     /// Optional Mach number.
     pub mach: Option<f64>,
+    /// Optional ground speed in meters per second.
+    pub ground_speed: Option<f64>,
+    /// Optional vertical speed, positive upward, in meters per second.
+    pub vertical_speed: Option<f64>,
+    /// Optional dynamic pressure in pascals.
+    pub dynamic_pressure: Option<f64>,
+    /// Optional normal load factor.
+    pub normal_load_factor: Option<f64>,
 }
 
 impl From<PyDerivedState> for pb::DerivedState {
@@ -144,6 +179,10 @@ impl From<PyDerivedState> for pb::DerivedState {
             ias: d.ias,
             cas: d.cas,
             mach: d.mach,
+            ground_speed: d.ground_speed,
+            vertical_speed: d.vertical_speed,
+            dynamic_pressure: d.dynamic_pressure,
+            normal_load_factor: d.normal_load_factor,
         }
     }
 }
@@ -151,7 +190,7 @@ impl From<PyDerivedState> for pb::DerivedState {
 #[pymethods]
 impl PyDerivedState {
     #[new]
-    #[pyo3(signature = (lat, lon, altitude, alpha=0.0, beta=0.0, tas=0.0, eas=0.0, gamma=0.0, chi=0.0, ias=None, cas=None, mach=None))]
+    #[pyo3(signature = (lat, lon, altitude, alpha=0.0, beta=0.0, tas=0.0, eas=0.0, gamma=0.0, chi=0.0, ias=None, cas=None, mach=None, ground_speed=None, vertical_speed=None, dynamic_pressure=None, normal_load_factor=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         lat: f64,
@@ -166,6 +205,10 @@ impl PyDerivedState {
         ias: Option<f64>,
         cas: Option<f64>,
         mach: Option<f64>,
+        ground_speed: Option<f64>,
+        vertical_speed: Option<f64>,
+        dynamic_pressure: Option<f64>,
+        normal_load_factor: Option<f64>,
     ) -> Self {
         Self {
             lat,
@@ -180,6 +223,10 @@ impl PyDerivedState {
             ias,
             cas,
             mach,
+            ground_speed,
+            vertical_speed,
+            dynamic_pressure,
+            normal_load_factor,
         }
     }
 
@@ -252,31 +299,167 @@ impl PyControlSurfaceState {
     }
 }
 
-/// Per-engine state.
-#[pyclass(from_py_object, name = "EngineState", get_all, set_all)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PyEngineState {
-    pub index: u32,
-    pub throttle_lever_ratio: Option<f64>,
+/// Cross-aircraft propulsor state for jets, propellers, and rotors.
+#[pyclass(from_py_object, name = "PropulsorState", get_all, set_all)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PyPropulsorState {
+    pub propulsor_id: String,
+    pub kind: i32,
+    pub throttle_ratio: Option<f64>,
+    pub rpm: Option<f64>,
+    pub blade_pitch_rad: Option<f64>,
+    pub thrust_newton: Option<f64>,
+    pub torque_newton_meter: Option<f64>,
+    pub index: Option<u32>,
 }
 
-impl From<PyEngineState> for pb::EngineState {
-    fn from(state: PyEngineState) -> Self {
+/// Scalar type declared by one telemetry field.
+#[pyclass(eq, eq_int, from_py_object, name = "TelemetryValueType")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum PyTelemetryValueType {
+    F64 = 1,
+    I64 = 2,
+    Bool = 3,
+}
+
+impl From<PyTelemetryValueType> for pb::TelemetryValueType {
+    fn from(value: PyTelemetryValueType) -> Self {
+        match value {
+            PyTelemetryValueType::F64 => Self::F64,
+            PyTelemetryValueType::I64 => Self::I64,
+            PyTelemetryValueType::Bool => Self::Bool,
+        }
+    }
+}
+
+/// Metadata for one scalar telemetry field.
+#[pyclass(from_py_object, name = "TelemetryField", get_all)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PyTelemetryField {
+    pub field_id: String,
+    pub label: String,
+    pub group: String,
+    pub unit: String,
+    pub description: String,
+    pub value_type: PyTelemetryValueType,
+}
+
+impl From<PyTelemetryField> for pb::TelemetryField {
+    fn from(field: PyTelemetryField) -> Self {
         Self {
-            index: state.index,
-            throttle_lever_ratio: state.throttle_lever_ratio,
+            field_id: field.field_id,
+            label: field.label,
+            group: field.group,
+            unit: field.unit,
+            description: field.description,
+            value_type: pb::TelemetryValueType::from(field.value_type) as i32,
         }
     }
 }
 
 #[pymethods]
-impl PyEngineState {
+impl PyTelemetryField {
     #[new]
-    #[pyo3(signature = (index, throttle_lever_ratio=None))]
-    fn new(index: u32, throttle_lever_ratio: Option<f64>) -> Self {
+    #[pyo3(signature = (field_id, label="".to_string(), group="".to_string(), unit="".to_string(), description="".to_string(), value_type=PyTelemetryValueType::F64))]
+    fn new(
+        field_id: String,
+        label: String,
+        group: String,
+        unit: String,
+        description: String,
+        value_type: PyTelemetryValueType,
+    ) -> Self {
         Self {
+            field_id,
+            label,
+            group,
+            unit,
+            description,
+            value_type,
+        }
+    }
+}
+
+/// Immutable schema for one independently sampled telemetry stream.
+#[pyclass(from_py_object, name = "TelemetryStreamSchema", get_all)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PyTelemetryStreamSchema {
+    pub stream_id: String,
+    pub name: String,
+    pub nominal_rate_hz: Option<f64>,
+    pub fields: Vec<PyTelemetryField>,
+}
+
+impl From<PyTelemetryStreamSchema> for pb::TelemetryStreamSchema {
+    fn from(schema: PyTelemetryStreamSchema) -> Self {
+        Self {
+            stream_id: schema.stream_id,
+            name: schema.name,
+            nominal_rate_hz: schema.nominal_rate_hz,
+            fields: schema.fields.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyTelemetryStreamSchema {
+    #[new]
+    #[pyo3(signature = (stream_id, fields, name="".to_string(), nominal_rate_hz=None))]
+    fn new(
+        stream_id: String,
+        fields: Vec<PyTelemetryField>,
+        name: String,
+        nominal_rate_hz: Option<f64>,
+    ) -> Self {
+        Self {
+            stream_id,
+            name,
+            nominal_rate_hz,
+            fields,
+        }
+    }
+}
+
+impl From<PyPropulsorState> for pb::PropulsorState {
+    fn from(state: PyPropulsorState) -> Self {
+        Self {
+            propulsor_id: state.propulsor_id,
+            kind: state.kind,
+            throttle_ratio: state.throttle_ratio,
+            rpm: state.rpm,
+            blade_pitch_rad: state.blade_pitch_rad,
+            thrust_newton: state.thrust_newton,
+            torque_newton_meter: state.torque_newton_meter,
+            index: state.index,
+        }
+    }
+}
+
+#[pymethods]
+impl PyPropulsorState {
+    #[new]
+    #[pyo3(signature = (propulsor_id, kind=0, throttle_ratio=None, rpm=None, blade_pitch_rad=None, thrust_newton=None, torque_newton_meter=None, index=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        propulsor_id: String,
+        kind: i32,
+        throttle_ratio: Option<f64>,
+        rpm: Option<f64>,
+        blade_pitch_rad: Option<f64>,
+        thrust_newton: Option<f64>,
+        torque_newton_meter: Option<f64>,
+        index: Option<u32>,
+    ) -> Self {
+        Self {
+            propulsor_id,
+            kind,
+            throttle_ratio,
+            rpm,
+            blade_pitch_rad,
+            thrust_newton,
+            torque_newton_meter,
             index,
-            throttle_lever_ratio,
         }
     }
 }
@@ -291,9 +474,9 @@ pub struct PyAircraftState {
     /// Velocity vector.
     #[pyo3(get, set)]
     pub velocity: PyVector3,
-    /// Attitude quaternion.
+    /// Validated attitude.
     #[pyo3(get, set)]
-    pub attitude: PyQuaternion,
+    pub attitude: PyAttitude,
     /// Angular velocity vector.
     #[pyo3(get, set)]
     pub angular_velocity: PyVector3,
@@ -303,11 +486,12 @@ pub struct PyAircraftState {
     /// Optional physical control-surface state.
     #[pyo3(get, set)]
     pub control_surfaces: Option<PyControlSurfaceState>,
-    /// Per-engine states.
+    /// Optional Body-FRD linear acceleration.
     #[pyo3(get, set)]
-    pub engines: Vec<PyEngineState>,
-    /// Extensible typed values passed through the protobuf state.
-    custom_fields: Vec<pb::CustomField>,
+    pub linear_acceleration_body: Option<PyVector3>,
+    /// Cross-aircraft propulsor states.
+    #[pyo3(get, set)]
+    pub propulsors: Vec<PyPropulsorState>,
 }
 
 impl From<PyAircraftState> for pb::AircraftState {
@@ -318,9 +502,9 @@ impl From<PyAircraftState> for pb::AircraftState {
             attitude: Some(state.attitude.into()),
             angular_velocity: Some(state.angular_velocity.into()),
             derived: state.derived.map(Into::into),
-            custom_fields: state.custom_fields,
             control_surfaces: state.control_surfaces.map(Into::into),
-            engines: state.engines.into_iter().map(Into::into).collect(),
+            linear_acceleration_body: state.linear_acceleration_body.map(Into::into),
+            propulsors: state.propulsors.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -331,12 +515,12 @@ impl PyAircraftState {
         Self {
             position: PyVector3::zero(),
             velocity: PyVector3::zero(),
-            attitude: PyQuaternion::identity(),
+            attitude: PyAttitude::identity(),
             angular_velocity: PyVector3::zero(),
             derived: None,
             control_surfaces: None,
-            engines: vec![],
-            custom_fields: vec![],
+            linear_acceleration_body: None,
+            propulsors: vec![],
         }
     }
 }
@@ -351,32 +535,29 @@ impl PyAircraftState {
         angular_velocity=None,
         derived=None,
         control_surfaces=None,
-        engines=None,
-        custom_fields=None
+        linear_acceleration_body=None,
+        propulsors=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         position: Option<PyVector3>,
         velocity: Option<PyVector3>,
-        attitude: Option<PyQuaternion>,
+        attitude: Option<PyAttitude>,
         angular_velocity: Option<PyVector3>,
         derived: Option<PyDerivedState>,
         control_surfaces: Option<PyControlSurfaceState>,
-        engines: Option<Vec<PyEngineState>>,
-        custom_fields: Option<&Bound<'_, PyDict>>,
+        linear_acceleration_body: Option<PyVector3>,
+        propulsors: Option<Vec<PyPropulsorState>>,
     ) -> PyResult<Self> {
         Ok(Self {
             position: position.unwrap_or(PyVector3::zero()),
             velocity: velocity.unwrap_or(PyVector3::zero()),
-            attitude: attitude.unwrap_or(PyQuaternion::identity()),
+            attitude: attitude.unwrap_or(PyAttitude::identity()),
             angular_velocity: angular_velocity.unwrap_or(PyVector3::zero()),
             derived,
             control_surfaces,
-            engines: engines.unwrap_or_default(),
-            custom_fields: custom_fields
-                .map(custom_fields_from_dict)
-                .transpose()?
-                .unwrap_or_default(),
+            linear_acceleration_body,
+            propulsors: propulsors.unwrap_or_default(),
         })
     }
 
@@ -386,90 +567,12 @@ impl PyAircraftState {
         Self::default_for_rust()
     }
 
-    /// Return custom fields as a regular Python dictionary.
-    #[getter]
-    fn custom_fields<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let result = PyDict::new(py);
-        for field in &self.custom_fields {
-            let Some(value) = field.value.as_ref().and_then(|value| value.kind.as_ref()) else {
-                continue;
-            };
-            match value {
-                pb::field_value::Kind::F64Value(value) => {
-                    result.set_item(&field.field_id, value)?;
-                }
-                pb::field_value::Kind::I64Value(value) => {
-                    result.set_item(&field.field_id, value)?;
-                }
-                pb::field_value::Kind::BoolValue(value) => {
-                    result.set_item(&field.field_id, value)?;
-                }
-                pb::field_value::Kind::StringValue(value) => {
-                    result.set_item(&field.field_id, value)?;
-                }
-                pb::field_value::Kind::BytesValue(value) => {
-                    result.set_item(&field.field_id, PyBytes::new(py, value))?;
-                }
-            }
-        }
-        Ok(result)
-    }
-
-    /// Replace all custom fields from a regular Python dictionary.
-    #[setter]
-    fn set_custom_fields(&mut self, values: &Bound<'_, PyDict>) -> PyResult<()> {
-        self.custom_fields = custom_fields_from_dict(values)?;
-        Ok(())
-    }
-
-    /// Add or replace a single custom field.
-    fn set_custom_field(&mut self, field_id: String, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let field = custom_field_from_value(field_id.clone(), value)?;
-        self.custom_fields
-            .retain(|existing| existing.field_id != field_id);
-        self.custom_fields.push(field);
-        Ok(())
-    }
-
     fn __repr__(&self) -> String {
         format!(
             "AircraftState(position={:?}, velocity={:?}, attitude={:?})",
             self.position, self.velocity, self.attitude
         )
     }
-}
-
-fn custom_fields_from_dict(values: &Bound<'_, PyDict>) -> PyResult<Vec<pb::CustomField>> {
-    values
-        .iter()
-        .map(|(key, value)| custom_field_from_value(key.extract()?, &value))
-        .collect()
-}
-
-fn custom_field_from_value(
-    field_id: String,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<pb::CustomField> {
-    let kind = if value.is_instance_of::<PyBool>() {
-        pb::field_value::Kind::BoolValue(value.extract()?)
-    } else if let Ok(value) = value.extract::<i64>() {
-        pb::field_value::Kind::I64Value(value)
-    } else if let Ok(value) = value.extract::<f64>() {
-        pb::field_value::Kind::F64Value(value)
-    } else if let Ok(value) = value.extract::<String>() {
-        pb::field_value::Kind::StringValue(value)
-    } else if let Ok(value) = value.cast::<PyBytes>() {
-        pb::field_value::Kind::BytesValue(value.as_bytes().to_vec())
-    } else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "custom field {field_id:?} must be float, int, bool, str, or bytes"
-        )));
-    };
-
-    Ok(pb::CustomField {
-        field_id,
-        value: Some(pb::FieldValue { kind: Some(kind) }),
-    })
 }
 
 #[cfg(test)]
@@ -481,7 +584,7 @@ mod tests {
         let py = PyAircraftState::new(
             Some(PyVector3::new(1.0, 2.0, 3.0)),
             Some(PyVector3::new(4.0, 5.0, 6.0)),
-            Some(PyQuaternion::new(1.0, 0.0, 0.0, 0.0)),
+            Some(PyAttitude::identity()),
             Some(PyVector3::new(0.1, 0.2, 0.3)),
             None,
             None,
@@ -493,6 +596,6 @@ mod tests {
         let pb: pb::AircraftState = py.into();
         assert_eq!(pb.position.unwrap().x, 1.0);
         assert_eq!(pb.velocity.unwrap().x, 4.0);
-        assert_eq!(pb.custom_fields.len(), 0);
+        assert!(pb.propulsors.is_empty());
     }
 }

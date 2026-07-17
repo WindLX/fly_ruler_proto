@@ -14,7 +14,7 @@ fn uuid(seed: u8) -> pb::Uuid {
 }
 
 fn handshake_message(client_uuid: pb::Uuid) -> pb::Message {
-    handshake_message_with_version(client_uuid, "0.2.4")
+    handshake_message_with_version(client_uuid, fly_ruler_proto_core::PROTOCOL_VERSION)
 }
 
 fn handshake_message_with_version(client_uuid: pb::Uuid, version: &str) -> pb::Message {
@@ -40,21 +40,25 @@ fn state(x: f64) -> pb::AircraftState {
         angular_velocity: None,
         derived: None,
         control_surfaces: None,
-        engines: vec![],
-        custom_fields: vec![pb::CustomField {
-            field_id: "throttle".to_string(),
-            value: Some(pb::FieldValue {
-                kind: Some(pb::field_value::Kind::F64Value(0.75)),
-            }),
+        linear_acceleration_body: None,
+        propulsors: vec![pb::PropulsorState {
+            propulsor_id: "engine".to_string(),
+            index: Some(1),
+            throttle_ratio: Some(0.75),
+            ..Default::default()
         }],
     }
 }
 
 fn spawn_message(aircraft_id: pb::Uuid) -> pb::Message {
+    spawn_message_at(aircraft_id, 2.0)
+}
+
+fn spawn_message_at(aircraft_id: pb::Uuid, timestamp: f64) -> pb::Message {
     pb::Message {
         envelope: Some(pb::message::Envelope::Request(pb::Request {
             id: Some(uuid(0x11)),
-            timestamp: 2.0,
+            timestamp,
             command: Some(pb::RequestCommand {
                 kind: Some(pb::request_command::Kind::AircraftEvent(
                     pb::AircraftEvent {
@@ -65,6 +69,7 @@ fn spawn_message(aircraft_id: pb::Uuid) -> pb::Message {
                                     name: "F-15".to_string(),
                                     toml_config: "[aircraft]\nname='F-15'".to_string(),
                                     initial_state: Some(state(1.0)),
+                                    telemetry_schemas: Vec::new(),
                                 },
                             )),
                         }),
@@ -73,6 +78,36 @@ fn spawn_message(aircraft_id: pb::Uuid) -> pb::Message {
             }),
         })),
     }
+}
+
+#[tokio::test]
+async fn zero_based_source_timeline_is_fresh_by_server_receipt_time() {
+    let store = Arc::new(TimeSeriesStore::new());
+    let mut runtime = KernelRuntime::new(Arc::clone(&store));
+    runtime.start_server("127.0.0.1:0").await.unwrap();
+    let server_addr = runtime.udp_local_addr().unwrap();
+    let mut client = Client::connect(&server_addr.to_string(), &LoggingConfig::default())
+        .await
+        .unwrap();
+    let aircraft_uuid = uuid(0x44);
+
+    client.send(handshake_message(uuid(0x33))).await.unwrap();
+    assert_ack(client.recv().await.unwrap().unwrap());
+    client
+        .send(spawn_message_at(aircraft_uuid.clone(), 0.0))
+        .await
+        .unwrap();
+    client
+        .send(state_update_message(aircraft_uuid, 0.1, 2.0))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let aircraft_id = "44".repeat(16);
+    assert_eq!(store.get_latest(&aircraft_id).unwrap().timestamp_secs, 0.1);
+    assert!(!store.live_state_is_stale(&aircraft_id, std::time::Duration::from_secs(1)));
+
+    runtime.stop_server().await;
 }
 
 fn state_update_message(aircraft_id: pb::Uuid, timestamp: f64, x: f64) -> pb::Message {
@@ -220,7 +255,7 @@ async fn udp_runtime_ingest_and_session_visibility() {
     let aircraft_id = "bb".repeat(16);
     let latest = store.get_latest(&aircraft_id).unwrap();
     assert_eq!(latest.timestamp_secs, 4.0);
-    assert_eq!(latest.state.custom_fields.len(), 1);
+    assert_eq!(latest.state.propulsors[0].propulsor_id, "engine");
 
     let events = store.get_events_range(&aircraft_id, 0.0, 10.0).unwrap();
     assert!(matches!(

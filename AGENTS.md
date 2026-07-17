@@ -2,8 +2,7 @@
 
 ## 项目用途
 
-`fly_ruler_proto` 是 FlyRuler 的 protobuf/UDP 协议与数据内核，包含 Rust core、Python PyO3 binding、Godot binding 和 Web 管理界面。`proto/fly_ruler.proto` 是 wire schema
-唯一事实源。
+`fly_ruler_proto` 是 FlyRuler 的 protobuf/UDP 协议与数据内核，包含 Rust core、Python PyO3 binding、Godot binding 和 Web 管理界面。`core/proto/fly_ruler.proto` 是 wire schema 唯一事实源。
 
 ## 工具链与验证
 

@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, shallowRef, triggerRef } from 'vue'
 
 import { api } from '@/api'
-import type { CurveStyle, SeriesCatalogItem, SeriesData, TimestampedState } from '@/types'
-import { curveKey, extractValue } from '@/utils'
+import type { CurveStyle, SeriesCatalogItem, SeriesData } from '@/types'
+import { curveKey } from '@/utils'
 
 export const useSeriesStore = defineStore('series', () => {
   const catalogs = shallowRef<Record<string, SeriesCatalogItem[]>>({})
@@ -12,6 +12,7 @@ export const useSeriesStore = defineStore('series', () => {
   const errors = shallowRef<Record<string, string | null>>({})
   const error = shallowRef<string | null>(null)
   const requestGenerations = new Map<string, number>()
+  const liveCursors = new Map<string, number>()
   const loading = computed(() => Object.values(loadingSignatures.value).some(Boolean))
 
   async function loadCatalog(aircraftId: string) {
@@ -34,11 +35,12 @@ export const useSeriesStore = defineStore('series', () => {
   async function loadCurves(
     curves: CurveStyle[],
     range: { start: number; end: number } | null,
-    maxPoints: number,
+    maxPoints: number | null,
+    append = false,
   ) {
     const unique = [...new Map(curves.map((curve) => [curveKey(curve), curve])).values()]
     if (unique.length === 0) return
-    const signature = curveSignature(unique)
+    const signature = `${curveSignature(unique)}|${range?.start ?? 'all'}:${range?.end ?? 'all'}|${maxPoints}`
     if (loadingSignatures.value[signature]) return
     const generation = (requestGenerations.get(signature) ?? 0) + 1
     requestGenerations.set(signature, generation)
@@ -53,12 +55,8 @@ export const useSeriesStore = defineStore('series', () => {
       )
       if (requestGenerations.get(signature) !== generation) return
       for (const series of response.series) {
-        data.value[series.key] = mergeSeriesData(
-          data.value[series.key],
-          series,
-          maxPoints,
-          'existing',
-        )
+        const next = append ? mergeSeriesData(data.value[series.key], series, 'existing') : series
+        data.value[series.key] = maxPoints === null ? next : downsampleSeriesData(next, maxPoints)
       }
       triggerRef(data)
     } catch (cause) {
@@ -81,40 +79,32 @@ export const useSeriesStore = defineStore('series', () => {
     return errors.value[curveSignature(curves)] ?? null
   }
 
-  function appendLive(curve: CurveStyle, timestamp: number, value: number, maxPoints: number) {
-    if (!Number.isFinite(timestamp) || !Number.isFinite(value)) return
-    const key = curveKey(curve)
-    mergeLivePoint(data.value, curve, key, timestamp, value, maxPoints)
-    triggerRef(data)
-  }
-
-  function mergeLiveSamples(
-    curves: CurveStyle[],
-    samples: Record<string, TimestampedState>,
-    maxPoints: number,
-    enabled: boolean,
-  ) {
-    if (!enabled) return
-    const unique = [...new Map(curves.map((curve) => [curveKey(curve), curve])).values()]
-    let changed = false
-    for (const curve of unique) {
-      const sample = samples[curve.aircraft_id]
-      if (!sample) continue
-      const value = extractValue(sample.state, curve.selector)
-      if (value === null || !Number.isFinite(sample.timestamp_secs)) continue
-      const key = curveKey(curve)
-      changed =
-        mergeLivePoint(data.value, curve, key, sample.timestamp_secs, value, maxPoints) || changed
-    }
-    if (changed) triggerRef(data)
-  }
-
   function clear() {
     data.value = {}
     loadingSignatures.value = {}
     errors.value = {}
     error.value = null
     requestGenerations.clear()
+    liveCursors.clear()
+  }
+
+  async function catchUpLiveCurves(
+    curves: CurveStyle[],
+    bounds: [number, number] | null,
+    maxPoints: number,
+  ) {
+    if (!bounds || curves.length === 0) return
+    const unique = [...new Map(curves.map((curve) => [curveKey(curve), curve])).values()]
+    const cursors = unique
+      .map((curve) => liveCursors.get(curveKey(curve)))
+      .filter((cursor): cursor is number => cursor !== undefined)
+    const start = cursors.length === unique.length ? Math.min(...cursors) : bounds[0]
+    await loadCurves(unique, { start, end: bounds[1] }, maxPoints, true)
+    for (const curve of unique) {
+      const points = data.value[curveKey(curve)]?.points ?? []
+      const latest = points[points.length - 1]?.[0]
+      if (latest !== undefined) liveCursors.set(curveKey(curve), latest)
+    }
   }
 
   return {
@@ -124,8 +114,7 @@ export const useSeriesStore = defineStore('series', () => {
     error,
     loadCatalog,
     loadCurves,
-    appendLive,
-    mergeLiveSamples,
+    catchUpLiveCurves,
     clear,
     isLoading,
     errorFor,
@@ -136,10 +125,60 @@ function curveSignature(curves: CurveStyle[]): string {
   return [...new Set(curves.map(curveKey))].sort().join('|')
 }
 
+export function downsampleSeriesData(series: SeriesData, maxPoints: number): SeriesData {
+  if (series.points.length <= maxPoints) return series
+  const points = lttb(series.points, maxPoints)
+  return {
+    ...series,
+    points,
+    returned_points: points.length,
+    stats: computeStats(points),
+  }
+}
+
+function lttb(points: Array<[number, number]>, threshold: number): Array<[number, number]> {
+  if (points.length <= threshold || threshold < 3) return points
+  const sampled: Array<[number, number]> = [points[0]!]
+  const every = (points.length - 2) / (threshold - 2)
+  let selected = 0
+  for (let bucket = 0; bucket < threshold - 2; bucket++) {
+    const averageStart = Math.min(Math.floor((bucket + 1) * every) + 1, points.length)
+    const averageEnd = Math.min(Math.floor((bucket + 2) * every) + 1, points.length)
+    const averageSlice = points.slice(averageStart, averageEnd)
+    const fallback = points[Math.min(Math.max(averageStart - 1, 0), points.length - 1)]!
+    const average = averageSlice.reduce(
+      (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
+      [0, 0] as [number, number],
+    )
+    const averageX = averageSlice.length === 0 ? fallback[0] : average[0] / averageSlice.length
+    const averageY = averageSlice.length === 0 ? fallback[1] : average[1] / averageSlice.length
+    const rangeStart = Math.floor(bucket * every) + 1
+    const rangeEnd = Math.min(Math.floor((bucket + 1) * every) + 1, points.length - 1)
+    const anchor = points[selected]!
+    let maxArea = -1
+    let next = rangeStart
+    for (let index = rangeStart; index < Math.max(rangeEnd, rangeStart + 1); index++) {
+      const candidateIndex = Math.min(index, points.length - 2)
+      const point = points[candidateIndex]!
+      const area = Math.abs(
+        (anchor[0] - averageX) * (point[1] - anchor[1]) -
+          (anchor[0] - point[0]) * (averageY - anchor[1]),
+      )
+      if (area > maxArea) {
+        maxArea = area
+        next = candidateIndex
+      }
+    }
+    sampled.push(points[next]!)
+    selected = next
+  }
+  sampled.push(points[points.length - 1]!)
+  return sampled
+}
+
 export function mergeSeriesData(
   existing: SeriesData | undefined,
   incoming: SeriesData,
-  _maxPoints: number,
   duplicatePreference: 'existing' | 'incoming',
 ): SeriesData {
   const points = mergePoints(existing?.points ?? [], incoming.points, duplicatePreference)
@@ -188,87 +227,10 @@ function mergePoints(
   return points
 }
 
-function mergeLivePoint(
-  data: Record<string, SeriesData>,
-  curve: CurveStyle,
-  key: string,
-  timestamp: number,
-  value: number,
-  _maxPoints: number,
-): boolean {
-  const existing = data[key]
-  if (!existing) {
-    data[key] = {
-      key,
-      aircraft_id: curve.aircraft_id,
-      selector: curve.selector,
-      points: [[timestamp, value]],
-      total_points: 1,
-      returned_points: 1,
-      stats: { min: value, max: value, last: value, start: timestamp, end: timestamp },
-    }
-    return true
-  }
-  const points = existing.points
-  const last = points[points.length - 1]
-  if (!last || timestamp > last[0]) {
-    points.push([timestamp, value])
-    existing.returned_points = points.length
-    existing.total_points = Math.max(existing.total_points, points.length)
-    existing.stats = updateStatsForAppend(existing.stats ?? null, timestamp, value)
-    return true
-  }
-  if (timestamp === last[0]) {
-    if (last[1] === value) return false
-    last[1] = value
-    existing.stats = computeStats(points)
-    existing.returned_points = points.length
-    existing.total_points = Math.max(existing.total_points, points.length)
-    return true
-  }
-  const index = lowerBound(points, timestamp)
-  if (points[index]?.[0] === timestamp) {
-    if (points[index]![1] === value) return false
-    points[index]![1] = value
-  } else {
-    points.splice(index, 0, [timestamp, value])
-  }
-  existing.returned_points = points.length
-  existing.total_points = Math.max(existing.total_points, points.length)
-  existing.stats = computeStats(points)
-  return true
-}
-
-function lowerBound(points: Array<[number, number]>, timestamp: number): number {
-  let low = 0
-  let high = points.length
-  while (low < high) {
-    const middle = (low + high) >> 1
-    if (points[middle]![0] < timestamp) low = middle + 1
-    else high = middle
-  }
-  return low
-}
-
 function pushDeduped(points: Array<[number, number]>, point: [number, number]): void {
   const previous = points[points.length - 1]
   if (previous?.[0] === point[0]) previous[1] = point[1]
   else points.push([point[0], point[1]])
-}
-
-function updateStatsForAppend(
-  stats: SeriesData['stats'],
-  timestamp: number,
-  value: number,
-): NonNullable<SeriesData['stats']> {
-  if (!stats) return { min: value, max: value, last: value, start: timestamp, end: timestamp }
-  return {
-    min: Math.min(stats.min, value),
-    max: Math.max(stats.max, value),
-    last: value,
-    start: Math.min(stats.start, timestamp),
-    end: Math.max(stats.end, timestamp),
-  }
 }
 
 function computeStats(points: Array<[number, number]>): SeriesData['stats'] {

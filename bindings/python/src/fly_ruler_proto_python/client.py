@@ -2,39 +2,50 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+import math
+from collections.abc import Sequence
 
 from fly_ruler_proto_python._core import (
     AircraftState,
+    Attitude,
     ControlSurfaceState,
     DerivedState,
-    EngineState,
+    PropulsorState,
     PyClient,
-    Quaternion,
+    TelemetryStreamSchema,
     Vector3,
 )
+
+
+def _validate_timestamp(name: str, timestamp: float | None) -> None:
+    if timestamp is not None and not math.isfinite(timestamp):
+        raise ValueError(f"{name} must be finite")
 
 
 def create_aircraft_state(
     position: tuple[float, float, float] = (0.0, 0.0, 0.0),
     velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    attitude: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+    attitude: Attitude | None = None,
     angular_velocity: tuple[float, float, float] = (0.0, 0.0, 0.0),
     derived: DerivedState | None = None,
     control_surfaces: ControlSurfaceState | None = None,
-    engines: list[EngineState] | None = None,
-    custom_fields: Mapping[str, float | int | bool | str | bytes] | None = None,
+    linear_acceleration_body: tuple[float, float, float] | None = None,
+    propulsors: list[PropulsorState] | None = None,
 ) -> AircraftState:
     """Create a default AircraftState for convenient scripting."""
     return AircraftState(
         position=Vector3(*position),
         velocity=Vector3(*velocity),
-        attitude=Quaternion(*attitude),
+        attitude=attitude or Attitude.identity(),
         angular_velocity=Vector3(*angular_velocity),
         derived=derived,
         control_surfaces=control_surfaces,
-        engines=engines,
-        custom_fields=custom_fields,
+        linear_acceleration_body=(
+            Vector3(*linear_acceleration_body)
+            if linear_acceleration_body is not None
+            else None
+        ),
+        propulsors=propulsors,
     )
 
 
@@ -58,13 +69,22 @@ class FlyRulerClient:
         initial_state: AircraftState | None = None,
         toml_config: str = "",
         heartbeat_interval_secs: float = 1.0,
+        telemetry_schemas: Sequence[TelemetryStreamSchema] = (),
+        spawn_timestamp: float | None = None,
     ) -> None:
+        _validate_timestamp("spawn_timestamp", spawn_timestamp)
+        if not math.isfinite(heartbeat_interval_secs) or heartbeat_interval_secs <= 0.0:
+            raise ValueError(
+                "heartbeat_interval_secs must be finite and greater than zero"
+            )
         self._inner = PyClient(
             address,
             aircraft_name,
             initial_state or create_aircraft_state(),
             toml_config,
             heartbeat_interval_secs,
+            list(telemetry_schemas),
+            spawn_timestamp,
         )
         self._closed = False
 
@@ -81,6 +101,7 @@ class FlyRulerClient:
         state: AircraftState,
         timestamp: float | None = None,
     ) -> None:
+        _validate_timestamp("timestamp", timestamp)
         self._inner.update_state(state, timestamp)
 
     def create_event(
@@ -88,11 +109,23 @@ class FlyRulerClient:
         event_name: str,
         timestamp: float | None = None,
     ) -> None:
+        _validate_timestamp("timestamp", timestamp)
         self._inner.create_event(event_name, timestamp)
+
+    def publish_telemetry(
+        self,
+        stream_id: str,
+        values: Sequence[float | int | bool],
+        timestamp: float | None = None,
+    ) -> None:
+        """Publish one frame in the exact field order declared by the stream schema."""
+        _validate_timestamp("timestamp", timestamp)
+        self._inner.publish_telemetry(stream_id, tuple(values), timestamp)
 
     def despawn(
         self, reason: str | None = None, timestamp: float | None = None
     ) -> None:
+        _validate_timestamp("timestamp", timestamp)
         self._inner.despawn(reason, timestamp)
 
     def close(self) -> None:

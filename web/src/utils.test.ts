@@ -19,15 +19,31 @@ import {
 } from '@/utils'
 
 describe('series helpers', () => {
-  it('keeps custom identifiers unambiguous', () => {
-    expect(selectorKey({ kind: 'custom', field_id: 'foo.bar' })).toBe('custom:foo.bar')
+  it('keeps propulsor identifiers unambiguous', () => {
+    expect(
+      selectorKey({
+        kind: 'propulsor',
+        propulsor_id: 'engine.left',
+        field: 'throttle_ratio',
+      }),
+    ).toBe('propulsor:engine.left:throttle_ratio')
   })
 
-  it('extracts standard, engine, and custom values', () => {
+  it('extracts standard and propulsor values', () => {
     const state = {
       position: { x: 1, y: 2, z: 3 },
-      engines: [{ index: 2, throttle_lever_ratio: 0.7 }],
-      custom_fields: { enabled: { kind: 'bool', value: true } },
+      propulsors: [
+        {
+          propulsor_id: 'engine.left',
+          kind: 1,
+          throttle_ratio: 0.7,
+          rpm: null,
+          blade_pitch_rad: null,
+          thrust_newton: null,
+          torque_newton_meter: null,
+          index: 1,
+        },
+      ],
       velocity: null,
       attitude: null,
       angular_velocity: null,
@@ -35,8 +51,13 @@ describe('series helpers', () => {
       control_surfaces: null,
     }
     expect(extractValue(state, { kind: 'standard', path: 'position.y' })).toBe(2)
-    expect(extractValue(state, { kind: 'engine_throttle', index: 2 })).toBe(0.7)
-    expect(extractValue(state, { kind: 'custom', field_id: 'enabled' })).toBe(1)
+    expect(
+      extractValue(state, {
+        kind: 'propulsor',
+        propulsor_id: 'engine.left',
+        field: 'throttle_ratio',
+      }),
+    ).toBe(0.7)
   })
 
   it('creates a valid default workspace and formats values', () => {

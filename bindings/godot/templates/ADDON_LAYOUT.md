@@ -1,17 +1,17 @@
-# Recommended Addon Layout
+# Linux addon layout
 
-Copy or generate this structure inside your Godot project:
+The installer produces the following Godot 4 addon layout:
 
 ```text
 res://addons/fly_ruler_proto/
   fly_ruler_proto_godot.gdextension
-  libfly_ruler_proto_godot.so          # Linux
-  fly_ruler_proto_godot.dll            # Windows
-  libfly_ruler_proto_godot.dylib       # macOS
-  FlyRulerDemo.gd                      # Optional demo script
+  libfly_ruler_proto_godot.so
+  fly_ruler_runtime_example.gd
+  README.md
+  manifest.json
+  web/
+    index.html
+    assets/
 ```
 
-Notes:
-- Keep file names consistent with `fly_ruler_proto_godot.gdextension`.
-- `.gdextension` should point to the real binary names on your target platform.
-- You can keep both debug/release binaries and switch by build/export setup.
+The `.gdextension` intentionally advertises Linux x86_64 only. Web files are served directly by the embedded management server and must remain ordinary filesystem assets in exported builds.

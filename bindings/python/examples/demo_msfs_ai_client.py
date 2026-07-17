@@ -16,10 +16,12 @@ import time
 from dataclasses import dataclass
 
 from fly_ruler_proto_python import (
+    Attitude,
     ControlSurfaceState,
     DerivedState,
-    EngineState,
     FlyRulerClient,
+    PropulsorKind,
+    PropulsorState,
     create_aircraft_state,
 )
 
@@ -68,7 +70,7 @@ def build_state(elapsed_s: float, demo: AircraftDemo):
         position=(north_m, east_m, -altitude),
         # Body-FRD velocity: x forward, y right, z down. The demo flies level.
         velocity=(demo.speed_mps, 0.0, 0.0),
-        attitude=quaternion,
+        attitude=Attitude.from_quaternion(quaternion),
         angular_velocity=(0.0, 0.0, omega),
         derived=DerivedState(
             lat=latitude,
@@ -87,8 +89,13 @@ def build_state(elapsed_s: float, demo: AircraftDemo):
             flaps_right_ratio=0.0,
             spoilers_ratio=0.0,
         ),
-        engines=[
-            EngineState(index, throttle_lever_ratio=throttle)
+        propulsors=[
+            PropulsorState(
+                f"engine.{index}",
+                kind=PropulsorKind.JET,
+                throttle_ratio=throttle,
+                index=index,
+            )
             for index in range(1, demo.engine_count + 1)
         ],
     )

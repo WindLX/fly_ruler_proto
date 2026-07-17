@@ -113,6 +113,8 @@ Useful options:
 Unless `--no-http` is supplied, the bridge embeds the same management service as `fly-ruler-server`. REST playback commands immediately affect SimConnect:
 Live follows the newest sample, paused replay writes a seek exactly once, and playing replay advances using previous-value hold. A seek, load, clear, or other playback revision forces an explicit SimConnect refresh even when the selected sample has the same timestamp.
 
+Live stale detection uses the core server's monotonic age since the last received state packet. The producer source timestamp is reserved for ordering, smoothing, and replay, so both Unix timestamps and zero-based simulation clocks are supported without comparing unrelated clocks.
+
 Release archives already contain `web/dist`; when launched from the extraction root, open `http://127.0.0.1:18003/` to use the management console. If the bridge is launched from another directory, pass `--web-root /absolute/path/to/fly-ruler-msfs/web/dist`.
 
 ## TOML configuration and logging
@@ -185,9 +187,9 @@ Despawn, session clear/load, replay seek, and bridge shutdown remove AI objects 
 - `angular_velocity`: body-FRD radians/second.
 - `control_surfaces`: standard control-surface angles in radians and ratios in
   `0..=1`.
-- `engines`: engine indices `1..=4` with throttle lever ratios in `0..=1`.
+- `propulsors`: stable `propulsor_id` values with optional simulator `index`; entries with index `1..=4` and `throttle_ratio` in `0..=1` drive the corresponding MSFS engine slot.
 
-The bridge writes MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed `GENERAL ENG THROTTLE LEVER POSITION` SimVars. It no longer writes `AIRSPEED TRUE RAW`, and it no longer reconstructs velocity from angle of attack, sideslip, and TAS. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments from the aircraft/model state. `derived.ias/cas/mach` remain protocol telemetry and are not written directly.
+The bridge writes MSFS body-axis velocity, body angular rates, standard control-surface SimVars, and indexed `GENERAL ENG THROTTLE LEVER POSITION` SimVars. It reads control surfaces only from `ControlSurfaceState`; model diagnostics belong in schema-first telemetry. It no longer writes `AIRSPEED TRUE RAW`, and it no longer reconstructs velocity from angle of attack, sideslip, and TAS. MSFS derives IAS, Mach, angle of attack, and sideslip for its native instruments from the aircraft/model state. Quaternion attitude remains authoritative and Euler angles are derived only while constructing an MSFS frame.
 
 ## Landing-gear events
 

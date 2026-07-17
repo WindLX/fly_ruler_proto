@@ -27,7 +27,7 @@ use tower::service_fn;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::ManagementConfig;
@@ -642,6 +642,15 @@ impl From<WorkspaceError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.status.is_server_error() {
+            error!(
+                target: "fly_ruler_proto_core.management",
+                status = %self.status,
+                code = self.code,
+                message = %self.message,
+                "management request failed"
+            );
+        }
         (
             self.status,
             Json(json!({
@@ -684,6 +693,7 @@ pub(crate) fn test_state(root: std::path::PathBuf) -> AppState {
             name: "test".to_string(),
             toml_config: String::new(),
             initial_state: None,
+            telemetry_schemas: Vec::new(),
         })),
     );
     store.append_state(
