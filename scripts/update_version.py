@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Update FlyRuler package versions across Rust, Python, Web, locks, and docs.
+"""跨 Rust、Python、Web、锁文件与文档更新 FlyRuler 包版本。
 
-Usage:
+脚本只更新项目自有的版本字段和选定的文档片段，不创建提交、标签或发布产物。
+
+Examples:
+    ```bash
     scripts/update_version.py 0.2.4
     scripts/update_version.py v0.2.4 --dry-run
-
-The script intentionally updates only project-owned version fields and selected
-documentation snippets. It does not create commits, tags, or publish artifacts.
+    ```
 """
 
 from __future__ import annotations
@@ -39,16 +40,37 @@ SEMVER_RE = re.compile(
 
 @dataclass
 class Edit:
+    """一次待写入文件的内容替换。
+
+    Attributes:
+        path: 目标文件路径。
+        before: 替换前内容。
+        after: 替换后内容。
+    """
+
     path: Path
     before: str
     after: str
 
     @property
     def changed(self) -> bool:
+        """返回替换前后内容是否不同。
+
+        Returns:
+            内容有变化时为 ``True``。
+        """
         return self.before != self.after
 
 
 def main() -> int:
+    """解析命令行参数并执行版本同步。
+
+    Returns:
+        进程退出码，成功时为 ``0``。
+
+    Raises:
+        SystemExit: 版本号非法或找不到待更新的版本字段时。
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", help="New semantic version, with or without leading v")
     parser.add_argument("--dry-run", action="store_true", help="Show files that would change")
@@ -98,6 +120,17 @@ def main() -> int:
 
 
 def normalize_version(raw: str) -> str:
+    """规范化用户输入的语义化版本号，去掉可选的前导 ``v``。
+
+    Args:
+        raw: 原始版本字符串。
+
+    Returns:
+        不含前导 ``v`` 的版本号。
+
+    Raises:
+        SystemExit: 输入不符合语义化版本格式。
+    """
     value = raw.strip()
     match = SEMVER_RE.match(value)
     if not match:
@@ -106,6 +139,14 @@ def normalize_version(raw: str) -> str:
 
 
 def read_workspace_version() -> str:
+    """从 ``Cargo.toml`` 读取 workspace 版本。
+
+    Returns:
+        当前 workspace 版本号。
+
+    Raises:
+        SystemExit: 找不到 ``[workspace.package]`` 版本字段。
+    """
     text = read("Cargo.toml")
     match = re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", text)
     if not match:
@@ -114,6 +155,14 @@ def read_workspace_version() -> str:
 
 
 def read_protocol_version() -> str:
+    """从 Rust 核心读取 ``PROTOCOL_VERSION``。
+
+    Returns:
+        当前协议版本字符串。
+
+    Raises:
+        SystemExit: 在 ``core/src/lib.rs`` 中找不到协议版本常量。
+    """
     text = read("core/src/lib.rs")
     match = re.search(r'(?m)^pub const PROTOCOL_VERSION: &str = "([^"]+)";$', text)
     if not match:
@@ -122,6 +171,14 @@ def read_protocol_version() -> str:
 
 
 def update_cargo_toml(new_version: str) -> Edit:
+    """为 ``Cargo.toml`` 的 workspace 版本字段生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "Cargo.toml"
     before = path.read_text(encoding="utf-8")
     after = re.sub(
@@ -134,6 +191,14 @@ def update_cargo_toml(new_version: str) -> Edit:
 
 
 def update_cargo_lock(new_version: str) -> Edit:
+    """为 ``Cargo.lock`` 中项目自有 crate 的版本字段生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "Cargo.lock"
     before = path.read_text(encoding="utf-8")
     package_re = re.compile(r"(?ms)(\[\[package\]\]\n.*?)(?=\n\[\[package\]\]|\Z)")
@@ -155,6 +220,14 @@ def update_cargo_lock(new_version: str) -> Edit:
 
 
 def update_protocol_version(new_version: str) -> Edit:
+    """为 Rust 核心的 ``PROTOCOL_VERSION`` 常量生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "core/src/lib.rs"
     before = path.read_text(encoding="utf-8")
     after = re.sub(
@@ -167,6 +240,14 @@ def update_protocol_version(new_version: str) -> Edit:
 
 
 def update_python_pyproject(new_version: str) -> Edit:
+    """为 Python 绑定的 ``pyproject.toml`` 版本字段生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "bindings/python/pyproject.toml"
     before = path.read_text(encoding="utf-8")
     after = re.sub(
@@ -179,6 +260,14 @@ def update_python_pyproject(new_version: str) -> Edit:
 
 
 def update_uv_lock(new_version: str) -> Edit:
+    """为 ``uv.lock`` 中 ``fly-ruler-proto-python`` 的版本字段生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "bindings/python/uv.lock"
     before = path.read_text(encoding="utf-8")
     package_re = re.compile(r"(?ms)(\[\[package\]\]\n.*?)(?=\n\[\[package\]\]|\Z)")
@@ -199,6 +288,14 @@ def update_uv_lock(new_version: str) -> Edit:
 
 
 def update_web_package_json(new_version: str) -> Edit:
+    """为 Web 控制台的 ``package.json`` 版本字段生成替换。
+
+    Args:
+        new_version: 新的语义化版本号。
+
+    Returns:
+        待写入的替换记录。
+    """
     path = ROOT / "web/package.json"
     before = path.read_text(encoding="utf-8")
     payload = json.loads(before)
@@ -208,6 +305,16 @@ def update_web_package_json(new_version: str) -> Edit:
 
 
 def update_docs(old_version: str, old_protocol_version: str, new_version: str) -> list[Edit]:
+    """为文档与测试中出现的版本片段生成替换。
+
+    Args:
+        old_version: 替换前的包版本号。
+        old_protocol_version: 替换前的协议版本号。
+        new_version: 新的语义化版本号。
+
+    Returns:
+        每个实际存在的目标文件对应一条替换记录。
+    """
     paths = [
         ROOT / "README.md",
         ROOT / "core/README.md",
@@ -241,6 +348,14 @@ def update_docs(old_version: str, old_protocol_version: str, new_version: str) -
 
 
 def read(relative_path: str) -> str:
+    """读取仓库根目录下的 UTF-8 文本文件。
+
+    Args:
+        relative_path: 相对仓库根的路径。
+
+    Returns:
+        文件完整内容。
+    """
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
