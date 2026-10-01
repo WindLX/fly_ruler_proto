@@ -23,12 +23,12 @@ message DerivedState {
   double lat      = 1;
   double lon      = 2;
   double altitude = 3;
-  double alpha    = 4;
-  double beta     = 5;
+  double alpha    = 4; // Angle of attack in radians.
+  double beta     = 5; // Sideslip angle in radians.
   double tas      = 6;
   double eas      = 7;
-  double gamma    = 8;
-  double chi      = 9;
+  double gamma    = 8; // Flight-path angle in radians.
+  double chi      = 9; // Track angle in radians.
   optional double ias  = 10;
   optional double cas  = 11;
   optional double mach = 12;
@@ -147,6 +147,13 @@ message AircraftEvent {
 message Handshake {
   string version     = 1;
   Uuid   client_uuid = 2;
+  ClientRole role    = 3;
+}
+
+enum ClientRole {
+  CLIENT_ROLE_UNSPECIFIED       = 0;
+  CLIENT_ROLE_PRODUCER          = 1;
+  CLIENT_ROLE_CURSOR_SUBSCRIBER = 2;
 }
 
 message Heartbeat {
@@ -159,6 +166,94 @@ message RequestCommand {
     Handshake     handshake      = 1;
     Heartbeat     heartbeat      = 2;
     AircraftEvent aircraft_event = 3;
+    CursorSubscribe cursor_subscribe = 4;
+    CursorEventAck cursor_event_ack = 5;
+  }
+}
+
+message CursorSubscribe {
+  double requested_hz = 1;
+}
+
+message CursorEventAck {
+  Uuid server_epoch = 1;
+  uint64 event_sequence = 2;
+}
+
+enum CursorPlaybackMode {
+  CURSOR_PLAYBACK_MODE_UNSPECIFIED    = 0;
+  CURSOR_PLAYBACK_MODE_LIVE           = 1;
+  CURSOR_PLAYBACK_MODE_REPLAY_PAUSED  = 2;
+  CURSOR_PLAYBACK_MODE_REPLAY_PLAYING = 3;
+}
+
+message CursorAircraftSnapshot {
+  Uuid aircraft_id = 1;
+  string name = 2;
+  string toml_config = 3;
+  double source_timestamp = 4;
+  bool stale = 5;
+  AircraftState state = 6;
+}
+
+message CursorFrame {
+  Uuid server_epoch = 1;
+  uint64 frame_sequence = 2;
+  CursorPlaybackMode mode = 3;
+  optional double cursor = 4;
+  optional double lower_bound = 5;
+  optional double upper_bound = 6;
+  double speed = 7;
+  uint64 revision = 8;
+  uint64 event_watermark = 9;
+  double generated_at = 10;
+  repeated CursorAircraftSnapshot aircraft = 11;
+}
+
+message CursorEvent {
+  uint64 sequence = 1;
+  Uuid aircraft_id = 2;
+  double source_timestamp = 3;
+  AircraftCommandInfo info = 4;
+}
+
+message CursorEventBatch {
+  Uuid server_epoch = 1;
+  uint64 event_sequence = 2;
+  uint64 revision = 3;
+  bool baseline = 4;
+  bool baseline_complete = 5;
+  repeated CursorEvent events = 6;
+}
+
+message CursorReset {
+  Uuid server_epoch = 1;
+  uint64 revision = 2;
+  optional double cursor = 3;
+  string reason = 4;
+}
+
+enum CursorPayloadKind {
+  CURSOR_PAYLOAD_KIND_UNSPECIFIED = 0;
+  CURSOR_PAYLOAD_KIND_FRAME       = 1;
+  CURSOR_PAYLOAD_KIND_EVENT_BATCH = 2;
+  CURSOR_PAYLOAD_KIND_RESET       = 3;
+}
+
+message CursorChunk {
+  Uuid server_epoch = 1;
+  CursorPayloadKind kind = 2;
+  uint64 sequence = 3;
+  uint32 chunk_index = 4;
+  uint32 chunk_count = 5;
+  uint32 total_size = 6;
+  uint32 checksum = 7;
+  bytes payload = 8;
+}
+
+message ServerPush {
+  oneof kind {
+    CursorChunk cursor_chunk = 1;
   }
 }
 
@@ -208,5 +303,6 @@ message Message {
   oneof envelope {
     Request  request  = 1;
     Response response = 2;
+    ServerPush server_push = 3;
   }
 }

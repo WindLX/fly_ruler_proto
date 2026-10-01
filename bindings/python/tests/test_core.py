@@ -195,7 +195,7 @@ class TestHelpers:
 
 class TestModuleApi:
     def test_protocol_version(self):
-        assert PROTOCOL_VERSION == "0.3.0"
+        assert PROTOCOL_VERSION == "0.4.0"
         assert get_protocol_version() == PROTOCOL_VERSION
 
 

@@ -12,7 +12,7 @@ pub mod client;
 pub mod server;
 
 pub use client::{AircraftClient, Client};
-pub use server::{Server, ServerRuntime, Session, SessionHandle};
+pub use server::{Server, ServerPublisherHandle, ServerRuntime, Session, SessionHandle};
 
 /// Transport errors.
 #[derive(Debug, Error)]
@@ -36,4 +36,12 @@ pub enum TransportError {
     /// Client-side internal channel closed unexpectedly.
     #[error("client channel closed: {0}")]
     ClientChannelClosed(&'static str),
+
+    /// The server did not acknowledge the initial handshake in time.
+    #[error("handshake timed out waiting for server ACK")]
+    HandshakeTimeout,
+
+    /// The server explicitly rejected the initial handshake.
+    #[error("handshake rejected: {0}")]
+    HandshakeRejected(String),
 }

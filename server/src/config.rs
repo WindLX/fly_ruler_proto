@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use fly_ruler_proto_core::{
-    LoggingConfig, ManagementConfig, ReplayConfig, RuntimeConfig, TransportConfig,
-    RUNTIME_CONFIG_SCHEMA_VERSION,
+    CursorStreamConfig, CursorStreamFileConfig, LoggingConfig, ManagementConfig, ReplayConfig,
+    RuntimeConfig, TransportConfig, RUNTIME_CONFIG_SCHEMA_VERSION,
 };
 use serde::Deserialize;
 
@@ -43,6 +43,10 @@ pub struct Args {
     #[arg(long)]
     heartbeat_timeout_secs: Option<u64>,
     #[arg(long)]
+    cursor_publish_hz: Option<f64>,
+    #[arg(long)]
+    max_subscribers: Option<usize>,
+    #[arg(long)]
     playback_default_speed: Option<f64>,
     #[arg(long)]
     playback_min_speed: Option<f64>,
@@ -59,6 +63,7 @@ pub struct Args {
 struct FileConfig {
     schema_version: Option<u32>,
     transport: TransportSection,
+    cursor_stream: CursorStreamFileConfig,
     management: ManagementSection,
     playback: PlaybackSection,
     logging: LoggingSection,
@@ -134,6 +139,7 @@ fn resolve(args: Args) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let default_management = ManagementConfig::default();
     let default_transport = TransportConfig::default();
     let default_replay = ReplayConfig::default();
+    let default_cursor = CursorStreamConfig::default();
     let udp_listen = args
         .udp_listen
         .or(file.transport.udp_listen)
@@ -180,6 +186,12 @@ fn resolve(args: Args) -> Result<ServerConfig, Box<dyn std::error::Error>> {
         .heartbeat_timeout_secs
         .or(file.transport.heartbeat_timeout_secs)
         .unwrap_or(default_transport.heartbeat_timeout_secs);
+    let cursor_publish_hz = args
+        .cursor_publish_hz
+        .unwrap_or(file.cursor_stream.publish_hz);
+    let max_subscribers = args
+        .max_subscribers
+        .unwrap_or(file.cursor_stream.max_subscribers);
     let default_speed = args
         .playback_default_speed
         .or(file.playback.default_speed)
@@ -215,6 +227,12 @@ fn resolve(args: Args) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     if heartbeat_timeout_secs <= heartbeat_interval_secs {
         return Err("transport.heartbeat_timeout_secs must exceed heartbeat_interval_secs".into());
     }
+    if !cursor_publish_hz.is_finite() || cursor_publish_hz <= 0.0 {
+        return Err("cursor_stream.publish_hz must be finite and greater than zero".into());
+    }
+    if max_subscribers == 0 {
+        return Err("cursor_stream.max_subscribers must be greater than zero".into());
+    }
     if !websocket_hz.is_finite() || websocket_hz <= 0.0 {
         return Err("management.websocket_hz must be finite and greater than zero".into());
     }
@@ -245,6 +263,11 @@ fn resolve(args: Args) -> Result<ServerConfig, Box<dyn std::error::Error>> {
             transport: TransportConfig {
                 heartbeat_interval_secs,
                 heartbeat_timeout_secs,
+            },
+            cursor_stream: CursorStreamConfig {
+                publish_hz: cursor_publish_hz,
+                max_subscribers,
+                ..default_cursor
             },
             management: ManagementConfig {
                 data_root,
@@ -297,6 +320,8 @@ mod tests {
             no_http: false,
             heartbeat_interval_secs: None,
             heartbeat_timeout_secs: None,
+            cursor_publish_hz: None,
+            max_subscribers: None,
             playback_default_speed: None,
             playback_min_speed: None,
             playback_max_speed: None,
@@ -313,6 +338,8 @@ mod tests {
         assert_eq!(config.management_listen, "127.0.0.1:18003");
         assert_eq!(config.runtime.transport.heartbeat_interval_secs, 5);
         assert_eq!(config.runtime.transport.heartbeat_timeout_secs, 15);
+        assert_eq!(config.runtime.cursor_stream.publish_hz, 30.0);
+        assert_eq!(config.runtime.cursor_stream.max_subscribers, 16);
         assert_eq!(config.runtime.replay.default_speed, 1.0);
         assert_eq!(config.runtime.replay.min_speed, 0.1);
         assert_eq!(config.runtime.replay.max_speed, 16.0);
@@ -332,12 +359,18 @@ mod tests {
         fs::write(
             &path,
             r#"
-schema_version = 1
+schema_version = 2
 
 [transport]
 udp_listen = "0.0.0.0:19002"
 heartbeat_interval_secs = 2
 heartbeat_timeout_secs = 9
+
+[cursor_stream]
+publish_hz = 24.0
+max_subscribers = 8
+reconnect_initial_secs = 0.5
+reconnect_max_secs = 5.0
 
 [management]
 enabled = false
@@ -371,6 +404,8 @@ file_path = "logs/server.log"
         assert_eq!(config.management_listen, "0.0.0.0:19003");
         assert_eq!(config.runtime.transport.heartbeat_interval_secs, 2);
         assert_eq!(config.runtime.transport.heartbeat_timeout_secs, 9);
+        assert_eq!(config.runtime.cursor_stream.publish_hz, 24.0);
+        assert_eq!(config.runtime.cursor_stream.max_subscribers, 8);
         assert_eq!(config.runtime.management.data_root, cwd.join("recordings"));
         assert_eq!(
             config.runtime.management.web_root,

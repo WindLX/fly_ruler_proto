@@ -15,6 +15,8 @@ use crate::PROTOCOL_VERSION;
 
 use super::TransportError;
 
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
+
 fn validate_source_timestamp(timestamp: Option<f64>) -> Result<(), TransportError> {
     if timestamp.is_some_and(|value| !value.is_finite()) {
         return Err(TransportError::InvalidMessage(
@@ -48,6 +50,7 @@ impl Client {
             pb::request_command::Kind::Handshake(pb::Handshake {
                 version: PROTOCOL_VERSION.to_string(),
                 client_uuid: Some(client_uuid),
+                role: pb::ClientRole::Producer as i32,
             }),
             None,
         )
@@ -250,6 +253,39 @@ fn uuid_to_pb(u: Uuid) -> pb::Uuid {
     }
 }
 
+fn validate_handshake_ack(message: pb::Message) -> Result<(), TransportError> {
+    let Some(pb::message::Envelope::Response(response)) = message.envelope else {
+        return Err(TransportError::InvalidMessage(
+            "expected response envelope for handshake".to_string(),
+        ));
+    };
+    match response.result {
+        Some(pb::response::Result::Ok(pb::ResponseData {
+            kind: Some(pb::response_data::Kind::Ack(true)),
+        })) => Ok(()),
+        Some(pb::response::Result::Err(error)) => Err(TransportError::HandshakeRejected(format!(
+            "code={} message={}",
+            error.code, error.message
+        ))),
+        _ => Err(TransportError::InvalidMessage(
+            "handshake response did not contain ACK=true".to_string(),
+        )),
+    }
+}
+
+async fn establish_session(client: &mut Client, client_uuid: Uuid) -> Result<(), TransportError> {
+    client
+        .send(Client::build_handshake_message(uuid_to_pb(client_uuid)))
+        .await?;
+    let response = tokio::time::timeout(HANDSHAKE_TIMEOUT, client.recv())
+        .await
+        .map_err(|_| TransportError::HandshakeTimeout)??
+        .ok_or_else(|| {
+            TransportError::InvalidMessage("server closed during handshake".to_string())
+        })?;
+    validate_handshake_ack(response)
+}
+
 /// High-level aircraft lifecycle client.
 ///
 /// One instance represents one aircraft and manages:
@@ -349,7 +385,14 @@ impl AircraftClient {
             "starting aircraft lifecycle client"
         );
 
-        let rust_client = Client::connect(addr, logging_config).await?;
+        let mut rust_client = Client::connect(addr, logging_config).await?;
+        establish_session(&mut rust_client, client_uuid_for_handshake).await?;
+        info!(
+            target: "fly_ruler_proto_core.transport",
+            addr = addr,
+            client_uuid = %client_uuid,
+            "aircraft lifecycle handshake acknowledged"
+        );
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Outbound>();
         let (op_tx, mut op_rx) = mpsc::unbounded_channel::<Operation>();
@@ -376,14 +419,6 @@ impl AircraftClient {
             }
             info!(target: "fly_ruler_proto_core.transport", "client sender task exited");
         });
-
-        send_outbound(
-            &out_tx,
-            Outbound::Send(Box::new(Client::build_handshake_message(uuid_to_pb(
-                client_uuid_for_handshake,
-            )))),
-            "handshake",
-        );
 
         let op_out_tx = out_tx.clone();
         let operation_handle = tokio::spawn(async move {
@@ -661,6 +696,18 @@ fn send_outbound(tx: &mpsc::UnboundedSender<Outbound>, outbound: Outbound, kind:
 mod tests {
     use super::*;
 
+    fn ack_message(value: bool) -> pb::Message {
+        pb::Message {
+            envelope: Some(pb::message::Envelope::Response(pb::Response {
+                id: None,
+                timestamp: 0.0,
+                result: Some(pb::response::Result::Ok(pb::ResponseData {
+                    kind: Some(pb::response_data::Kind::Ack(value)),
+                })),
+            })),
+        }
+    }
+
     #[test]
     fn source_timestamps_accept_simulation_time_and_reject_non_finite_values() {
         assert!(validate_source_timestamp(Some(0.0)).is_ok());
@@ -668,5 +715,30 @@ mod tests {
         assert!(validate_source_timestamp(None).is_ok());
         assert!(validate_source_timestamp(Some(f64::NAN)).is_err());
         assert!(validate_source_timestamp(Some(f64::INFINITY)).is_err());
+    }
+
+    #[test]
+    fn handshake_requires_positive_ack() {
+        assert!(validate_handshake_ack(ack_message(true)).is_ok());
+        assert!(matches!(
+            validate_handshake_ack(ack_message(false)),
+            Err(TransportError::InvalidMessage(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn aircraft_client_rejects_unresponsive_server() {
+        let silent_server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = silent_server.local_addr().unwrap().to_string();
+        let result = AircraftClient::connect(
+            &address,
+            &LoggingConfig::default(),
+            "silent-test".to_string(),
+            pb::AircraftState::default(),
+            String::new(),
+            1.0,
+        )
+        .await;
+        assert!(matches!(result, Err(TransportError::HandshakeTimeout)));
     }
 }

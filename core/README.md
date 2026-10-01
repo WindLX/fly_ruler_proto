@@ -14,7 +14,7 @@
 | 传输层 | UDP（Tokio `UdpSocket`） |
 | 会话管理 | 应用层会话，基于 `client_uuid` + 握手/心跳维护 |
 | 序列化 | `prost` 生成 Rust 类型，运行时编码/解码 |
-| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "0.3.0"` |
+| 协议版本 | `core/src/lib.rs` 中 `PROTOCOL_VERSION = "0.4.0"` |
 
 ### 1.2 消息帧格式
 
@@ -240,7 +240,7 @@ message Message {
 ### 4.1 `lib.rs` — 公共 API 入口
 
 ```rust
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 ```
 
 对外导出：
@@ -499,6 +499,7 @@ pub struct LoggingConfig {
 
 pub struct RuntimeConfig {
     pub transport: TransportConfig,
+    pub cursor_stream: CursorStreamConfig,
     pub store: StoreConfig,
     pub management: ManagementConfig,
     pub replay: ReplayConfig,
@@ -511,7 +512,13 @@ pub struct RuntimeConfig {
 默认 `web_root` 可直接托管控制台；完整目录契约见
 [`../RELEASING.md`](../RELEASING.md)。
 
-### 4.7 HTTP、WebSocket 与回放
+### 4.7 Cursor 房间流
+
+协议 `0.4.0` 的同一 UDP 端口区分 `producer` 与只读 `cursor_subscriber`。producer 继续上传 spawn/state/event；subscriber 只能订阅、heartbeat 和 ACK。Kernel 对一个全局 `PlaybackSnapshot` 解析所有已 spawn 飞机，发布带 epoch、frame sequence、revision、cursor、事件 watermark 和完整 `AircraftState` 的原子 `CursorFrame`。
+
+状态帧按约 1 KiB protobuf payload 分片，完整帧 latest-wins 且不重传；生命周期/custom event 使用独立序列、ACK、去重和有限重传。初次连接、epoch/revision 变化或 cursor 反向跳转先可靠发送 reset 与当前事件基线，客户端在 watermark 已应用前不会发布状态帧。`CursorClient` 不创建 store 或本地 playback，并提供接收、丢帧、重组失败与事件重传统计。
+
+### 4.8 HTTP、WebSocket 与回放
 
 管理服务只允许绑定 loopback 地址。默认地址为 UDP
 `127.0.0.1:18002`、HTTP/WS `127.0.0.1:18003`，独立进程可通过
@@ -570,7 +577,7 @@ Web 曲线与时间轴使用全局数据起点作为相对零点，以避免 Uni
 读入临时 Store，成功后才原子替换当前内存。维护窗口丢弃的 UDP 数量可从
 `GET /status` 查看。
 
-### 4.8 `logging.rs` — 日志初始化
+### 4.9 `logging.rs` — 日志初始化
 
 - 使用 `tracing_subscriber` + `tracing_appender`
 - 全局 `OnceLock` 保证仅初始化一次

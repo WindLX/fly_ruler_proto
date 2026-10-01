@@ -60,7 +60,7 @@ uv run python examples/demo_client.py
 从 Release 页面下载最新 MSFS 2024 桥接包（包含 `fly-ruler-msfs-bridge.exe`、`SimConnect.dll`、示例 TOML 和内置 Web 控制台）：
 
 ```bash
-wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.3.0/fly-ruler-msfs-windows-x86_64.zip
+wget https://github.com/WindLX/fly_ruler_proto/releases/download/v0.4.0/fly-ruler-msfs-windows-x86_64.zip
 unzip fly-ruler-msfs-windows-x86_64.zip -d fly-ruler-msfs
 ```
 
@@ -135,10 +135,10 @@ just package-msfs
 
 ```bash
 # 先预览会改哪些文件
-just set-version 0.3.0 --dry-run
+just set-version 0.4.0 --dry-run
 
-# 正式更新；也支持 v0.3.0 写法
-just set-version 0.3.0
+# 正式更新；也支持 v0.4.0 写法
+just set-version 0.4.0
 ```
 
 脚本只修改项目自身版本，不会创建 commit、tag 或上传包。更新后建议执行：

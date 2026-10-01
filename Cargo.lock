@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "fly_ruler_proto_core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "approx",
  "arrow",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "fly_ruler_proto_godot"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fly_ruler_proto_core",
  "godot",
@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "fly_ruler_proto_msfs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "fly_ruler_proto_python"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fly_ruler_proto_core",
  "pyo3",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "fly_ruler_proto_server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "fly_ruler_proto_core",

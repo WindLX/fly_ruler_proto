@@ -10,6 +10,10 @@
 pub mod attitude;
 /// Runtime configuration types.
 pub mod config;
+/// Cursor-aligned room snapshot assembly and UDP streaming types.
+pub mod cursor;
+/// Reserved custom-event names shared by protocol consumers.
+pub mod events;
 /// Kernel orchestration and server lifecycle.
 pub mod kernel;
 /// Tracing subscriber initialization.
@@ -27,14 +31,18 @@ pub mod transport;
 pub(crate) mod utils;
 
 /// Protocol semantic version shared across core and language bindings.
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 // Re-export commonly used types
 pub use attitude::{Attitude, AttitudeError};
 pub use config::{
-    LoggingConfig, LoggingFileConfig, ManagementConfig, ManagementFileConfig, PlaybackFileConfig,
-    ReplayConfig, RuntimeConfig, RuntimeFileConfig, StoreConfig, TransportConfig,
-    TransportFileConfig, RUNTIME_CONFIG_SCHEMA_VERSION,
+    CursorStreamFileConfig, LoggingConfig, LoggingFileConfig, ManagementConfig,
+    ManagementFileConfig, PlaybackFileConfig, ReplayConfig, RuntimeConfig, RuntimeFileConfig,
+    StoreConfig, TransportConfig, TransportFileConfig, RUNTIME_CONFIG_SCHEMA_VERSION,
+};
+pub use cursor::{
+    assemble_cursor_frame, CursorClient, CursorClientConfig, CursorClientEvent, CursorClientStats,
+    CursorStreamConfig, CursorStreamRuntime,
 };
 pub use kernel::{KernelRuntime, RuntimeError};
 pub use logging::init_logging;
@@ -50,5 +58,6 @@ pub use store::{
     TimeSeriesStore, TimestampedEvent, TimestampedState, TimestampedTelemetryFrame,
 };
 pub use transport::{
-    AircraftClient, Client, Server, ServerRuntime, Session, SessionHandle, TransportError,
+    AircraftClient, Client, Server, ServerPublisherHandle, ServerRuntime, Session, SessionHandle,
+    TransportError,
 };

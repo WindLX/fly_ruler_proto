@@ -1,3 +1,4 @@
+mod aircraft_profile;
 mod model;
 
 use std::path::PathBuf;
@@ -7,18 +8,150 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use std::{fs, io::Write};
 
+use aircraft_profile::{
+    load_aircraft_profile, source_dictionary, vec3_dictionary, AircraftProfileFile,
+};
 use fly_ruler_proto_core::{pb, Attitude};
 use fly_ruler_proto_core::{
+    CursorClient, CursorClientConfig, CursorClientEvent, CursorClientStats, CursorStreamConfig,
     KernelRuntime, LoggingConfig, ManagementConfig, PlaybackStepDirection, PlaybackStepUnit,
     ReplayConfig, RuntimeConfig, TimeSeriesStore, TransportConfig,
 };
 use godot::classes::ProjectSettings;
 use godot::prelude::*;
 use model::{
-    build_frame, AircraftSnapshotData, FrameSnapshotData, GodotRuntimeFileConfig, RuntimeSettings,
+    apply_cursor_event_batch, build_frame, frame_from_cursor, AircraftSnapshotData,
+    FrameSnapshotData, GodotRuntimeFileConfig, RuntimeSettings,
 };
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+
+#[derive(GodotClass)]
+#[class(base = RefCounted)]
+struct FlyRulerAircraftProfileConfig {
+    profile: Option<AircraftProfileFile>,
+    config_error: GString,
+    base: Base<RefCounted>,
+}
+
+#[godot_api]
+impl IRefCounted for FlyRulerAircraftProfileConfig {
+    fn init(base: Base<RefCounted>) -> Self {
+        Self {
+            profile: None,
+            config_error: GString::new(),
+            base,
+        }
+    }
+}
+
+#[godot_api]
+impl FlyRulerAircraftProfileConfig {
+    #[func]
+    fn load_toml(&mut self, path: GString) -> bool {
+        self.config_error = GString::new();
+        let absolute = ProjectSettings::singleton()
+            .globalize_path(&path)
+            .to_string();
+        match load_aircraft_profile(&absolute) {
+            Ok(profile) => {
+                self.profile = Some(profile);
+                true
+            }
+            Err(error) => {
+                self.profile = None;
+                self.config_error = GString::from(error.as_str());
+                false
+            }
+        }
+    }
+
+    #[func]
+    fn last_error(&self) -> GString {
+        self.config_error.clone()
+    }
+
+    #[func]
+    fn as_dictionary(&self) -> VarDictionary {
+        let mut output = VarDictionary::new();
+        let Some(profile) = &self.profile else {
+            return output;
+        };
+        output.set("schema_version", profile.schema_version as i64);
+        output.set("profile_id", profile.profile_id.as_str());
+        output.set("display_name", profile.display_name.as_str());
+        output.set("priority", profile.priority);
+        let model_ids: PackedStringArray = profile
+            .match_rules
+            .model_ids
+            .iter()
+            .map(|value| GString::from(value.as_str()))
+            .collect();
+        let name_prefixes: PackedStringArray = profile
+            .match_rules
+            .name_prefixes
+            .iter()
+            .map(|value| GString::from(value.as_str()))
+            .collect();
+        output.set("model_ids", &model_ids);
+        output.set("name_prefixes", &name_prefixes);
+        let mut model = VarDictionary::new();
+        model.set("scene", profile.model.scene.as_str());
+        model.set("scale", &vec3_dictionary(profile.model.scale));
+        model.set(
+            "rotation_degrees",
+            &vec3_dictionary(profile.model.rotation_degrees),
+        );
+        model.set("ground_offset_m", profile.model.ground_offset_m);
+        model.set("bounding_radius_m", profile.model.bounding_radius_m);
+        model.set(
+            "camera_target_m",
+            &vec3_dictionary(profile.model.camera_target_m),
+        );
+        model.set("cockpit_enabled", profile.model.cockpit_enabled);
+        model.set(
+            "cockpit_eye_m",
+            &vec3_dictionary(profile.model.cockpit_eye_m),
+        );
+        model.set("orbit_yaw_degrees", profile.model.orbit_yaw_degrees);
+        model.set("orbit_pitch_degrees", profile.model.orbit_pitch_degrees);
+        model.set(
+            "orbit_distance_multiplier",
+            profile.model.orbit_distance_multiplier,
+        );
+        output.set("model", &model);
+        let panels: PackedStringArray = profile
+            .hud
+            .panels
+            .iter()
+            .map(|value| GString::from(value.as_str()))
+            .collect();
+        output.set("panels", &panels);
+        let mut channels = Array::<VarDictionary>::new();
+        for channel in &profile.channels {
+            let mut value = VarDictionary::new();
+            value.set("id", channel.id.as_str());
+            value.set("panel", channel.panel.as_str());
+            value.set("label", channel.label.as_str());
+            value.set("source", &source_dictionary(&channel.source));
+            let mut range = VarDictionary::new();
+            range.set("min", channel.range.min);
+            range.set("max", channel.range.max);
+            value.set("range", &range);
+            let mut display = VarDictionary::new();
+            display.set("transform", channel.display.transform.as_str());
+            display.set("unit", channel.display.unit.as_str());
+            display.set("decimals", channel.display.decimals);
+            display.set("scale", channel.display.scale);
+            display.set("offset", channel.display.offset);
+            display.set("invert", channel.display.invert);
+            value.set("display", &display);
+            channels.push(&value);
+        }
+        output.set("channels", &channels);
+        output
+    }
+}
 
 fn load_config_file(path: &str) -> Result<GodotRuntimeFileConfig, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
@@ -26,8 +159,40 @@ fn load_config_file(path: &str) -> Result<GodotRuntimeFileConfig, String> {
         return Err("configuration file exceeds 64 KiB".to_string());
     }
     let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let file: GodotRuntimeFileConfig =
-        toml::from_str(&source).map_err(|error| error.to_string())?;
+    let mut document: toml::Value = toml::from_str(&source).map_err(|error| error.to_string())?;
+    let schema_version = document
+        .get("schema_version")
+        .and_then(toml::Value::as_integer)
+        .unwrap_or(0);
+    if schema_version == 1 {
+        let root = document
+            .as_table_mut()
+            .ok_or_else(|| "configuration root must be a table".to_string())?;
+        root.insert(
+            "schema_version".to_string(),
+            toml::Value::Integer(fly_ruler_proto_core::RUNTIME_CONFIG_SCHEMA_VERSION.into()),
+        );
+        if let Some(transport) = root
+            .get_mut("transport")
+            .and_then(toml::Value::as_table_mut)
+        {
+            transport
+                .entry("role".to_string())
+                .or_insert_with(|| toml::Value::String("server".to_string()));
+            let server_address = transport
+                .get("udp_listen")
+                .cloned()
+                .unwrap_or_else(|| toml::Value::String("127.0.0.1:18002".to_string()));
+            transport
+                .entry("server_address".to_string())
+                .or_insert(server_address);
+        }
+        root.entry("cursor_stream".to_string()).or_insert_with(|| {
+            toml::Value::try_from(fly_ruler_proto_core::CursorStreamFileConfig::default())
+                .expect("cursor stream defaults serialize")
+        });
+    }
+    let file: GodotRuntimeFileConfig = document.try_into().map_err(|error| error.to_string())?;
     if file.schema_version != fly_ruler_proto_core::RUNTIME_CONFIG_SCHEMA_VERSION {
         return Err(format!(
             "unsupported schema_version {}; expected {}",
@@ -62,6 +227,7 @@ enum RuntimeStatus {
     Stopped,
     Starting,
     Running,
+    Reconnecting,
     Stopping,
     Failed,
 }
@@ -72,6 +238,7 @@ impl RuntimeStatus {
             Self::Stopped => "stopped",
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Reconnecting => "reconnecting",
             Self::Stopping => "stopping",
             Self::Failed => "failed",
         }
@@ -95,8 +262,17 @@ enum WorkerEvent {
     Started {
         udp: String,
         management: String,
+        remote: String,
+        role: String,
     },
-    Sessions(Vec<(String, String, f64)>),
+    Reconnecting(String),
+    StreamReset {
+        reason: String,
+        epoch: String,
+    },
+    CursorEvents(pb::CursorEventBatch),
+    StreamStats(CursorClientStats),
+    Sessions(Vec<(String, String, f64, String)>),
     OperationCompleted {
         id: u64,
         success: bool,
@@ -111,7 +287,11 @@ enum WorkerEvent {
 #[class(base = RefCounted)]
 struct FlyRulerRuntimeConfig {
     #[var]
+    role: GString,
+    #[var]
     udp_listen: GString,
+    #[var]
+    server_address: GString,
     #[var]
     management_enabled: bool,
     #[var]
@@ -135,6 +315,14 @@ struct FlyRulerRuntimeConfig {
     #[var]
     stale_timeout_secs: f64,
     #[var]
+    cursor_publish_hz: f64,
+    #[var]
+    max_subscribers: i64,
+    #[var]
+    reconnect_initial_secs: f64,
+    #[var]
+    reconnect_max_secs: f64,
+    #[var]
     log_level: GString,
     #[var]
     log_file: GString,
@@ -147,7 +335,9 @@ impl IRefCounted for FlyRulerRuntimeConfig {
     fn init(base: Base<RefCounted>) -> Self {
         let file = GodotRuntimeFileConfig::default();
         Self {
+            role: GString::from(&file.transport.role),
             udp_listen: GString::from(&file.transport.udp_listen),
+            server_address: GString::from(&file.transport.server_address),
             management_enabled: file.management.enabled,
             management_listen: GString::from(&file.management.listen),
             data_root: GString::from(&file.management.data_root),
@@ -159,6 +349,10 @@ impl IRefCounted for FlyRulerRuntimeConfig {
             replay_min_speed: file.playback.min_speed,
             replay_max_speed: file.playback.max_speed,
             stale_timeout_secs: file.visualization.stale_timeout_secs,
+            cursor_publish_hz: file.cursor_stream.publish_hz,
+            max_subscribers: file.cursor_stream.max_subscribers as i64,
+            reconnect_initial_secs: file.cursor_stream.reconnect_initial_secs,
+            reconnect_max_secs: file.cursor_stream.reconnect_max_secs,
             log_level: GString::from(&file.logging.level),
             log_file: GString::from(&file.logging.file_path),
             config_error: GString::new(),
@@ -180,7 +374,9 @@ impl FlyRulerRuntimeConfig {
 
     fn resolve(&self) -> Result<RuntimeSettings, String> {
         let settings = RuntimeSettings {
+            role: self.role.to_string(),
             udp_listen: self.udp_listen.to_string(),
+            server_address: self.server_address.to_string(),
             management_enabled: self.management_enabled,
             management_listen: self.management_listen.to_string(),
             data_root: Self::globalize(&self.data_root),
@@ -194,6 +390,11 @@ impl FlyRulerRuntimeConfig {
             replay_min_speed: self.replay_min_speed,
             replay_max_speed: self.replay_max_speed,
             stale_timeout_secs: self.stale_timeout_secs,
+            cursor_publish_hz: self.cursor_publish_hz,
+            max_subscribers: usize::try_from(self.max_subscribers)
+                .map_err(|_| "max_subscribers must be positive".to_string())?,
+            reconnect_initial_secs: self.reconnect_initial_secs,
+            reconnect_max_secs: self.reconnect_max_secs,
             log_level: self.log_level.to_string(),
             log_file: (!self.log_file.is_empty()).then(|| Self::globalize(&self.log_file)),
         };
@@ -203,7 +404,9 @@ impl FlyRulerRuntimeConfig {
     }
 
     fn apply_file(&mut self, file: GodotRuntimeFileConfig) {
+        self.role = GString::from(&file.transport.role);
         self.udp_listen = GString::from(&file.transport.udp_listen);
+        self.server_address = GString::from(&file.transport.server_address);
         self.heartbeat_interval_secs = file.transport.heartbeat_interval_secs as i64;
         self.heartbeat_timeout_secs = file.transport.heartbeat_timeout_secs as i64;
         self.management_enabled = file.management.enabled;
@@ -213,6 +416,10 @@ impl FlyRulerRuntimeConfig {
         self.websocket_hz = file.management.websocket_hz;
         self.snapshot_hz = file.visualization.snapshot_hz;
         self.stale_timeout_secs = file.visualization.stale_timeout_secs;
+        self.cursor_publish_hz = file.cursor_stream.publish_hz;
+        self.max_subscribers = file.cursor_stream.max_subscribers as i64;
+        self.reconnect_initial_secs = file.cursor_stream.reconnect_initial_secs;
+        self.reconnect_max_secs = file.cursor_stream.reconnect_max_secs;
         self.replay_min_speed = file.playback.min_speed;
         self.replay_max_speed = file.playback.max_speed;
         self.log_level = GString::from(&file.logging.level);
@@ -221,7 +428,9 @@ impl FlyRulerRuntimeConfig {
 
     fn as_file(&self) -> GodotRuntimeFileConfig {
         let mut file = GodotRuntimeFileConfig::default();
+        file.transport.role = self.role.to_string();
         file.transport.udp_listen = self.udp_listen.to_string();
+        file.transport.server_address = self.server_address.to_string();
         file.transport.heartbeat_interval_secs = self.heartbeat_interval_secs.max(0) as u64;
         file.transport.heartbeat_timeout_secs = self.heartbeat_timeout_secs.max(0) as u64;
         file.management.enabled = self.management_enabled;
@@ -231,6 +440,10 @@ impl FlyRulerRuntimeConfig {
         file.management.websocket_hz = self.websocket_hz;
         file.visualization.snapshot_hz = self.snapshot_hz;
         file.visualization.stale_timeout_secs = self.stale_timeout_secs;
+        file.cursor_stream.publish_hz = self.cursor_publish_hz;
+        file.cursor_stream.max_subscribers = self.max_subscribers.max(0) as usize;
+        file.cursor_stream.reconnect_initial_secs = self.reconnect_initial_secs;
+        file.cursor_stream.reconnect_max_secs = self.reconnect_max_secs;
         file.playback.min_speed = self.replay_min_speed;
         file.playback.max_speed = self.replay_max_speed;
         file.logging.level = self.log_level.to_string();
@@ -315,11 +528,17 @@ struct FlyRulerAircraftSnapshot {
     #[var]
     stale: bool,
     #[var]
+    has_gear_down: bool,
+    #[var]
+    gear_down: bool,
+    #[var]
     position_ned_m: Vector3,
     #[var]
     velocity_frd_mps: Vector3,
     #[var]
     attitude_wxyz: Quaternion,
+    #[var]
+    attitude_euler_rad: Vector3,
     #[var]
     angular_velocity_frd_radps: Vector3,
     #[var]
@@ -364,9 +583,13 @@ struct FlyRulerRuntime {
     status: RuntimeStatus,
     udp_local_address: GString,
     management_local_address: GString,
+    remote_server_address: GString,
+    connection_epoch: GString,
+    role: GString,
     last_error: GString,
     latest_snapshot: Option<Gd<FlyRulerFrameSnapshot>>,
     active_sessions: Array<VarDictionary>,
+    stream_stats: VarDictionary,
     command_tx: Option<Sender<Command>>,
     event_rx: Option<Receiver<WorkerEvent>>,
     snapshot_rx: Option<Receiver<FrameSnapshotData>>,
@@ -382,9 +605,13 @@ impl INode for FlyRulerRuntime {
             status: RuntimeStatus::Stopped,
             udp_local_address: GString::new(),
             management_local_address: GString::new(),
+            remote_server_address: GString::new(),
+            connection_epoch: GString::new(),
+            role: "server".into(),
             last_error: GString::new(),
             latest_snapshot: None,
             active_sessions: Array::new(),
+            stream_stats: VarDictionary::new(),
             command_tx: None,
             event_rx: None,
             snapshot_rx: None,
@@ -423,6 +650,10 @@ impl FlyRulerRuntime {
     fn operation_completed(operation_id: i64, success: bool, error: GString);
     #[signal]
     fn runtime_error(error: GString);
+    #[signal]
+    fn cursor_events_published(events: Array<VarDictionary>, baseline: bool);
+    #[signal]
+    fn stream_reset(reason: GString);
 
     #[func]
     fn start(&mut self, config: Gd<FlyRulerRuntimeConfig>) -> bool {
@@ -436,6 +667,12 @@ impl FlyRulerRuntime {
                 self.report_error(error);
                 return false;
             }
+        };
+        self.role = settings.role.as_str().into();
+        self.remote_server_address = if settings.role == "client" {
+            settings.server_address.as_str().into()
+        } else {
+            GString::new()
         };
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
@@ -468,6 +705,18 @@ impl FlyRulerRuntime {
         self.management_local_address.clone()
     }
     #[func]
+    fn remote_server_address(&self) -> GString {
+        self.remote_server_address.clone()
+    }
+    #[func]
+    fn connection_epoch(&self) -> GString {
+        self.connection_epoch.clone()
+    }
+    #[func]
+    fn role(&self) -> GString {
+        self.role.clone()
+    }
+    #[func]
     fn last_error(&self) -> GString {
         self.last_error.clone()
     }
@@ -478,6 +727,10 @@ impl FlyRulerRuntime {
     #[func]
     fn active_sessions(&self) -> Array<VarDictionary> {
         self.active_sessions.clone()
+    }
+    #[func]
+    fn stream_stats(&self) -> VarDictionary {
+        self.stream_stats.clone()
     }
 
     #[func]
@@ -557,6 +810,10 @@ impl FlyRulerRuntime {
     }
 
     fn send(&mut self, command: Command) -> bool {
+        if self.role == "client" {
+            self.report_error("client runtime is receive-only".to_string());
+            return false;
+        }
         if self.status != RuntimeStatus::Running {
             self.report_error("runtime command requires running state".to_string());
             return false;
@@ -612,10 +869,76 @@ impl FlyRulerRuntime {
         }
         for event in events {
             match event {
-                WorkerEvent::Started { udp, management } => {
+                WorkerEvent::Started {
+                    udp,
+                    management,
+                    remote,
+                    role,
+                } => {
                     self.udp_local_address = udp.as_str().into();
                     self.management_local_address = management.as_str().into();
+                    self.remote_server_address = remote.as_str().into();
+                    self.role = role.as_str().into();
                     self.set_status(RuntimeStatus::Running);
+                }
+                WorkerEvent::Reconnecting(error) => {
+                    self.latest_snapshot = None;
+                    self.report_error(error);
+                    self.set_status(RuntimeStatus::Reconnecting);
+                }
+                WorkerEvent::StreamReset { reason, epoch } => {
+                    self.latest_snapshot = None;
+                    self.connection_epoch = epoch.as_str().into();
+                    self.signals().stream_reset().emit(reason.as_str());
+                }
+                WorkerEvent::CursorEvents(batch) => {
+                    let mut events = Array::new();
+                    for event in batch.events {
+                        let mut value = VarDictionary::new();
+                        value.set("sequence", event.sequence as i64);
+                        value.set("source_timestamp_secs", event.source_timestamp);
+                        let aircraft_id =
+                            event.aircraft_id.as_ref().map_or_else(String::new, |uuid| {
+                                uuid.value
+                                    .iter()
+                                    .map(|byte| format!("{byte:02x}"))
+                                    .collect()
+                            });
+                        value.set("aircraft_id", aircraft_id);
+                        if let Some(kind) = event.info.and_then(|info| info.kind) {
+                            match kind {
+                                pb::aircraft_command_info::Kind::Spawn(_) => {
+                                    value.set("kind", "spawn")
+                                }
+                                pb::aircraft_command_info::Kind::Despawn(_) => {
+                                    value.set("kind", "despawn")
+                                }
+                                pb::aircraft_command_info::Kind::CustomEvent(name) => {
+                                    value.set("kind", "custom");
+                                    value.set("name", name);
+                                }
+                                pb::aircraft_command_info::Kind::StateUpdate(_)
+                                | pb::aircraft_command_info::Kind::TelemetryFrame(_) => continue,
+                            }
+                        }
+                        events.push(&value);
+                    }
+                    self.signals()
+                        .cursor_events_published()
+                        .emit(&events, batch.baseline);
+                }
+                WorkerEvent::StreamStats(stats) => {
+                    let mut value = VarDictionary::new();
+                    value.set("datagrams_received", stats.datagrams_received as i64);
+                    value.set("frames_received", stats.frames_received as i64);
+                    value.set("frames_dropped", stats.frames_dropped as i64);
+                    value.set("reassembly_failures", stats.reassembly_failures as i64);
+                    value.set(
+                        "event_batches_received",
+                        stats.event_batches_received as i64,
+                    );
+                    value.set("event_retransmits", stats.event_retransmits as i64);
+                    self.stream_stats = value;
                 }
                 WorkerEvent::OperationCompleted { id, success, error } => {
                     self.signals()
@@ -624,11 +947,12 @@ impl FlyRulerRuntime {
                 }
                 WorkerEvent::Sessions(sessions) => {
                     let mut values = Array::new();
-                    for (addr, client_uuid_hex, last_seen_secs) in sessions {
+                    for (addr, client_uuid_hex, last_seen_secs, role) in sessions {
                         let mut value = VarDictionary::new();
                         value.set("addr", addr);
                         value.set("client_uuid_hex", client_uuid_hex);
                         value.set("last_seen_secs", last_seen_secs);
+                        value.set("role", role);
                         values.push(&value);
                     }
                     self.active_sessions = values;
@@ -663,11 +987,27 @@ impl FlyRulerRuntime {
         self.snapshot_rx = None;
         self.udp_local_address = GString::new();
         self.management_local_address = GString::new();
+        self.remote_server_address = GString::new();
+        self.connection_epoch = GString::new();
+        self.stream_stats = VarDictionary::new();
         self.set_status(RuntimeStatus::Stopped);
     }
 }
 
 fn worker_main(
+    settings: RuntimeSettings,
+    command_rx: Receiver<Command>,
+    event_tx: Sender<WorkerEvent>,
+    snapshot_tx: SyncSender<FrameSnapshotData>,
+) {
+    if settings.role == "client" {
+        client_worker_main(settings, command_rx, event_tx, snapshot_tx);
+        return;
+    }
+    server_worker_main(settings, command_rx, event_tx, snapshot_tx);
+}
+
+fn server_worker_main(
     settings: RuntimeSettings,
     command_rx: Receiver<Command>,
     event_tx: Sender<WorkerEvent>,
@@ -685,6 +1025,12 @@ fn worker_main(
         transport: TransportConfig {
             heartbeat_interval_secs: settings.heartbeat_interval_secs,
             heartbeat_timeout_secs: settings.heartbeat_timeout_secs,
+        },
+        cursor_stream: CursorStreamConfig {
+            publish_hz: settings.cursor_publish_hz,
+            max_subscribers: settings.max_subscribers,
+            stale_timeout: Duration::from_secs_f64(settings.stale_timeout_secs),
+            ..CursorStreamConfig::default()
         },
         management: ManagementConfig {
             data_root: settings.data_root.clone().into(),
@@ -737,7 +1083,12 @@ fn worker_main(
             return;
         }
     };
-    let _ = event_tx.send(WorkerEvent::Started { udp, management });
+    let _ = event_tx.send(WorkerEvent::Started {
+        udp,
+        management,
+        remote: String::new(),
+        role: "server".to_string(),
+    });
     let playback = kernel.playback();
     let interval = Duration::from_secs_f64(1.0 / settings.snapshot_hz);
     let mut next_snapshot = Instant::now();
@@ -770,6 +1121,11 @@ fn worker_main(
                         session.addr.to_string(),
                         session.client_uuid_hex,
                         session.last_seen_secs,
+                        match session.role {
+                            pb::ClientRole::Producer => "producer".to_string(),
+                            pb::ClientRole::CursorSubscriber => "cursor_subscriber".to_string(),
+                            pb::ClientRole::Unspecified => "unspecified".to_string(),
+                        },
                     )
                 })
                 .collect();
@@ -781,6 +1137,152 @@ fn worker_main(
         kernel.stop_management_server().await;
         kernel.stop_server().await;
     });
+    let _ = event_tx.send(WorkerEvent::Stopped);
+}
+
+fn client_worker_main(
+    settings: RuntimeSettings,
+    command_rx: Receiver<Command>,
+    event_tx: Sender<WorkerEvent>,
+    snapshot_tx: SyncSender<FrameSnapshotData>,
+) {
+    let async_runtime = match tokio::runtime::Runtime::new() {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = event_tx.send(WorkerEvent::Error(error.to_string()));
+            return;
+        }
+    };
+    let mut reconnect_delay = settings.reconnect_initial_secs;
+    let mut running = true;
+    while running {
+        match command_rx.try_recv() {
+            Ok(Command::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
+            Ok(_) => {
+                let _ = event_tx.send(WorkerEvent::CommandError(
+                    "client runtime is receive-only".to_string(),
+                ));
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        let connect_result = async_runtime.block_on(CursorClient::connect(&CursorClientConfig {
+            server_address: settings.server_address.clone(),
+            requested_hz: settings.cursor_publish_hz,
+        }));
+        let mut client = match connect_result {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = event_tx.send(WorkerEvent::Reconnecting(error.to_string()));
+                match command_rx.recv_timeout(Duration::from_secs_f64(reconnect_delay)) {
+                    Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                reconnect_delay = (reconnect_delay * 2.0).min(settings.reconnect_max_secs);
+                continue;
+            }
+        };
+        reconnect_delay = settings.reconnect_initial_secs;
+        let udp = client
+            .local_addr()
+            .map_or_else(|_| String::new(), |value| value.to_string());
+        let mut gear_states = std::collections::HashMap::new();
+        let mut last_receive = Instant::now();
+        let mut last_heartbeat = Instant::now();
+        let mut announced_running = false;
+        let disconnect_reason = async_runtime.block_on(async {
+            loop {
+                match command_rx.try_recv() {
+                    Ok(Command::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => {
+                        return None;
+                    }
+                    Ok(_) => {
+                        let _ = event_tx.send(WorkerEvent::CommandError(
+                            "client runtime is receive-only".to_string(),
+                        ));
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                if last_heartbeat.elapsed() >= Duration::from_secs(settings.heartbeat_interval_secs)
+                {
+                    if let Err(error) = client.heartbeat().await {
+                        return Some(error.to_string());
+                    }
+                    last_heartbeat = Instant::now();
+                }
+                match tokio::time::timeout(Duration::from_millis(50), client.recv()).await {
+                    Ok(Ok(CursorClientEvent::Reset(reset))) => {
+                        gear_states.clear();
+                        last_receive = Instant::now();
+                        let epoch = reset
+                            .server_epoch
+                            .as_ref()
+                            .map_or_else(String::new, |uuid| {
+                                uuid.value
+                                    .iter()
+                                    .map(|byte| format!("{byte:02x}"))
+                                    .collect()
+                            });
+                        let _ = event_tx.send(WorkerEvent::StreamReset {
+                            reason: reset.reason,
+                            epoch,
+                        });
+                    }
+                    Ok(Ok(CursorClientEvent::EventBatch(batch))) => {
+                        last_receive = Instant::now();
+                        if batch.baseline {
+                            let epoch =
+                                batch
+                                    .server_epoch
+                                    .as_ref()
+                                    .map_or_else(String::new, |uuid| {
+                                        uuid.value
+                                            .iter()
+                                            .map(|byte| format!("{byte:02x}"))
+                                            .collect()
+                                    });
+                            let _ = event_tx.send(WorkerEvent::StreamReset {
+                                reason: "cursor_baseline".to_string(),
+                                epoch,
+                            });
+                        }
+                        apply_cursor_event_batch(&batch, &mut gear_states);
+                        let _ = event_tx.send(WorkerEvent::CursorEvents(batch));
+                    }
+                    Ok(Ok(CursorClientEvent::Frame(frame))) => {
+                        last_receive = Instant::now();
+                        if !announced_running {
+                            let _ = event_tx.send(WorkerEvent::Started {
+                                udp: udp.clone(),
+                                management: String::new(),
+                                remote: settings.server_address.clone(),
+                                role: "client".to_string(),
+                            });
+                            announced_running = true;
+                        }
+                        match snapshot_tx.try_send(frame_from_cursor(frame, &gear_states)) {
+                            Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+                            Err(mpsc::TrySendError::Disconnected(_)) => return None,
+                        }
+                    }
+                    Ok(Err(error)) => return Some(error.to_string()),
+                    Err(_) => {}
+                }
+                let _ = event_tx.send(WorkerEvent::StreamStats(client.stats()));
+                if last_receive.elapsed() > Duration::from_secs(settings.heartbeat_timeout_secs) {
+                    return Some("cursor stream timed out".to_string());
+                }
+            }
+        });
+        if let Some(reason) = disconnect_reason {
+            let _ = event_tx.send(WorkerEvent::StreamReset {
+                reason: "connection_lost".to_string(),
+                epoch: String::new(),
+            });
+            let _ = event_tx.send(WorkerEvent::Reconnecting(reason));
+        } else {
+            running = false;
+        }
+    }
     let _ = event_tx.send(WorkerEvent::Stopped);
 }
 
@@ -897,9 +1399,12 @@ fn aircraft_to_godot(data: AircraftSnapshotData) -> Gd<FlyRulerAircraftSnapshot>
             source_timestamp_secs: data.source_timestamp_secs,
             spawned: true,
             stale: data.stale,
+            has_gear_down: data.gear_down.is_some(),
+            gear_down: data.gear_down.unwrap_or(true),
             position_ned_m: vector(state.position.as_ref()),
             velocity_frd_mps: vector(state.velocity.as_ref()),
             attitude_wxyz: quaternion(state.attitude.as_ref()),
+            attitude_euler_rad: attitude_euler(state.attitude.as_ref()),
             angular_velocity_frd_radps: vector(state.angular_velocity.as_ref()),
             linear_acceleration_frd_mps2: vector(state.linear_acceleration_body.as_ref()),
             derived: derived(state.derived.as_ref()),
@@ -921,6 +1426,15 @@ fn quaternion(value: Option<&pb::Quaternion>) -> Quaternion {
         .map_or(Quaternion::IDENTITY, |value| {
             let [w, x, y, z] = value.quaternion();
             Quaternion::new(x as f32, y as f32, z as f32, w as f32)
+        })
+}
+
+fn attitude_euler(value: Option<&pb::Quaternion>) -> Vector3 {
+    value
+        .and_then(|value| Attitude::try_from(value).ok())
+        .map_or(Vector3::ZERO, |value| {
+            let [roll, pitch, yaw] = value.euler();
+            Vector3::new(roll as f32, pitch as f32, yaw as f32)
         })
 }
 
@@ -1048,6 +1562,8 @@ mod config_file_tests {
         )
         .unwrap();
         let loaded = load_config_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.transport.role, "server");
         assert_eq!(loaded.transport.udp_listen, "127.0.0.1:19002");
         assert_eq!(
             loaded.management,
@@ -1065,7 +1581,7 @@ mod config_file_tests {
         let root = test_root("invalid");
         fs::create_dir_all(&root).unwrap();
         let path = root.join("config.toml");
-        fs::write(&path, "schema_version = 2\n").unwrap();
+        fs::write(&path, "schema_version = 3\n").unwrap();
         assert!(load_config_file(path.to_str().unwrap())
             .unwrap_err()
             .contains("schema_version"));
@@ -1086,5 +1602,15 @@ mod config_file_tests {
         assert!(save_config_file(&path, &GodotRuntimeFileConfig::default()).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "original");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn aircraft_snapshot_euler_is_projected_by_core_attitude() {
+        let attitude = Attitude::from_euler([0.2, -0.3, 0.4]).unwrap();
+        let encoded = pb::Quaternion::from(&attitude);
+        let projected = attitude_euler(Some(&encoded));
+        assert!((projected.x - 0.2).abs() < 1.0e-6);
+        assert!((projected.y + 0.3).abs() < 1.0e-6);
+        assert!((projected.z - 0.4).abs() < 1.0e-6);
     }
 }

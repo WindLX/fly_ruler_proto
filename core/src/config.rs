@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Current version of the shared runtime TOML schema.
-pub const RUNTIME_CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_CONFIG_SCHEMA_VERSION: u32 = 2;
 
 /// Shared host-runtime sections persisted by bridge applications.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,6 +18,8 @@ pub struct RuntimeFileConfig {
     pub schema_version: u32,
     /// UDP transport settings.
     pub transport: TransportFileConfig,
+    /// Cursor room publication/subscription settings.
+    pub cursor_stream: CursorStreamFileConfig,
     /// HTTP/WebSocket management settings.
     pub management: ManagementFileConfig,
     /// Playback limits.
@@ -31,6 +33,7 @@ impl Default for RuntimeFileConfig {
         Self {
             schema_version: RUNTIME_CONFIG_SCHEMA_VERSION,
             transport: TransportFileConfig::default(),
+            cursor_stream: CursorStreamFileConfig::default(),
             management: ManagementFileConfig::default(),
             playback: PlaybackFileConfig::default(),
             logging: LoggingFileConfig::default(),
@@ -42,8 +45,12 @@ impl Default for RuntimeFileConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TransportFileConfig {
+    /// Runtime role: `server` or receive-only `client`.
+    pub role: String,
     /// UDP bind address.
     pub udp_listen: String,
+    /// Authoritative room address used in client mode.
+    pub server_address: String,
     /// Client heartbeat interval in seconds.
     pub heartbeat_interval_secs: u64,
     /// Server-side session timeout in seconds.
@@ -53,9 +60,36 @@ pub struct TransportFileConfig {
 impl Default for TransportFileConfig {
     fn default() -> Self {
         Self {
-            udp_listen: "127.0.0.1:18002".to_string(),
+            role: "server".to_string(),
+            udp_listen: "0.0.0.0:18002".to_string(),
+            server_address: "127.0.0.1:18002".to_string(),
             heartbeat_interval_secs: 5,
             heartbeat_timeout_secs: 15,
+        }
+    }
+}
+
+/// Persisted cursor room streaming settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CursorStreamFileConfig {
+    /// Server snapshot publication rate.
+    pub publish_hz: f64,
+    /// Maximum room observers.
+    pub max_subscribers: usize,
+    /// Initial client reconnect delay.
+    pub reconnect_initial_secs: f64,
+    /// Maximum client reconnect delay.
+    pub reconnect_max_secs: f64,
+}
+
+impl Default for CursorStreamFileConfig {
+    fn default() -> Self {
+        Self {
+            publish_hz: 30.0,
+            max_subscribers: 16,
+            reconnect_initial_secs: 0.5,
+            reconnect_max_secs: 5.0,
         }
     }
 }
@@ -89,7 +123,6 @@ impl Default for ManagementFileConfig {
 }
 
 /// Persisted playback speed limits.
-/// Persisted logging settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PlaybackFileConfig {
@@ -239,6 +272,8 @@ impl Default for LoggingConfig {
 pub struct RuntimeConfig {
     /// Transport and session configuration.
     pub transport: TransportConfig,
+    /// Authoritative cursor stream configuration.
+    pub cursor_stream: crate::cursor::CursorStreamConfig,
     /// Store ingestion configuration.
     pub store: StoreConfig,
     /// HTTP/WebSocket management server configuration.

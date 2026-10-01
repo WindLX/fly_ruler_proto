@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fly_ruler_proto_core::pb;
 use fly_ruler_proto_core::store::{aircraft_count_for, event_count_for, state_count_for};
 use fly_ruler_proto_core::{
-    Client, KernelRuntime, LoggingConfig, RuntimeConfig, TimeSeriesStore, TransportConfig,
+    AircraftClient, Client, KernelRuntime, LoggingConfig, RuntimeConfig, TimeSeriesStore,
+    TransportConfig,
 };
 
 fn uuid(seed: u8) -> pb::Uuid {
@@ -18,6 +19,14 @@ fn handshake_message(client_uuid: pb::Uuid) -> pb::Message {
 }
 
 fn handshake_message_with_version(client_uuid: pb::Uuid, version: &str) -> pb::Message {
+    handshake_message_with_role(client_uuid, version, pb::ClientRole::Producer)
+}
+
+fn handshake_message_with_role(
+    client_uuid: pb::Uuid,
+    version: &str,
+    role: pb::ClientRole,
+) -> pb::Message {
     pb::Message {
         envelope: Some(pb::message::Envelope::Request(pb::Request {
             id: Some(uuid(0x10)),
@@ -26,10 +35,44 @@ fn handshake_message_with_version(client_uuid: pb::Uuid, version: &str) -> pb::M
                 kind: Some(pb::request_command::Kind::Handshake(pb::Handshake {
                     version: version.to_string(),
                     client_uuid: Some(client_uuid),
+                    role: role as i32,
                 })),
             }),
         })),
     }
+}
+
+#[tokio::test]
+async fn cursor_subscriber_cannot_upload_aircraft_events() {
+    let store = Arc::new(TimeSeriesStore::new());
+    let mut runtime = KernelRuntime::new(Arc::clone(&store));
+    runtime.start_server("127.0.0.1:0").await.unwrap();
+    let server_addr = runtime.udp_local_addr().unwrap();
+    let mut client = Client::connect(&server_addr.to_string(), &LoggingConfig::default())
+        .await
+        .unwrap();
+
+    client
+        .send(handshake_message_with_role(
+            uuid(0x71),
+            fly_ruler_proto_core::PROTOCOL_VERSION,
+            pb::ClientRole::CursorSubscriber,
+        ))
+        .await
+        .unwrap();
+    assert_ack(client.recv().await.unwrap().unwrap());
+    client.send(spawn_message(uuid(0x72))).await.unwrap();
+
+    let message = client.recv().await.unwrap().unwrap();
+    let Some(pb::message::Envelope::Response(response)) = message.envelope else {
+        panic!("expected permission error response");
+    };
+    let Some(pb::response::Result::Err(error)) = response.result else {
+        panic!("expected permission error result");
+    };
+    assert_eq!(error.code, pb::ErrorCode::InvalidState as i32);
+    assert_eq!(aircraft_count_for(&store), 0);
+    runtime.stop_server().await;
 }
 
 fn state(x: f64) -> pb::AircraftState {
@@ -275,6 +318,44 @@ async fn udp_runtime_ingest_and_session_visibility() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].client_uuid_hex.len(), 32);
 
+    runtime.stop_server().await;
+}
+
+#[tokio::test]
+async fn aircraft_lifecycle_client_waits_for_handshake_and_streams_state() {
+    let store = Arc::new(TimeSeriesStore::new());
+    let mut runtime = KernelRuntime::new(Arc::clone(&store));
+    runtime.start_server("127.0.0.1:0").await.unwrap();
+    let server_addr = runtime.udp_local_addr().unwrap();
+
+    let mut client = AircraftClient::connect(
+        &server_addr.to_string(),
+        &LoggingConfig::default(),
+        "GTM integration".to_string(),
+        state(1.0),
+        "[aircraft]\nmodel='boeing_737_800'".to_string(),
+        1.0,
+    )
+    .await
+    .unwrap();
+    let aircraft_id = client.aircraft_uuid().replace('-', "");
+    client.update_state(state(42.0), None).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if store
+                .get_latest(&aircraft_id)
+                .is_some_and(|sample| sample.state.position.as_ref().unwrap().x == 42.0)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    client.close().await.unwrap();
     runtime.stop_server().await;
 }
 

@@ -25,6 +25,16 @@ pub struct Session {
     pub client_uuid_hex: String,
     /// Last seen timestamp in seconds since the Unix epoch.
     pub last_seen_secs: f64,
+    /// Negotiated client role.
+    pub role: pb::ClientRole,
+    /// Whether a cursor subscriber completed the subscribe request.
+    pub cursor_subscribed: bool,
+    /// Subscriber-requested frame rate before server-side clamping.
+    pub cursor_requested_hz: f64,
+    /// Highest reliable cursor event batch acknowledged by this client.
+    pub cursor_event_ack: u64,
+    /// Server epoch whose reliable event sequence is being acknowledged.
+    pub cursor_epoch: Vec<u8>,
     last_seen_at: Instant,
 }
 
@@ -35,6 +45,11 @@ impl Session {
             addr,
             client_uuid_hex,
             last_seen_secs: now_secs(),
+            role: pb::ClientRole::Producer,
+            cursor_subscribed: false,
+            cursor_requested_hz: 30.0,
+            cursor_event_ack: 0,
+            cursor_epoch: Vec::new(),
             last_seen_at: Instant::now(),
         }
     }
@@ -98,6 +113,38 @@ pub struct SessionHandle {
     state: SessionState,
 }
 
+/// Cloneable server socket/session handle used by cursor publishers.
+#[derive(Clone)]
+pub struct ServerPublisherHandle {
+    server: Arc<Server>,
+}
+
+impl ServerPublisherHandle {
+    /// Return active sessions.
+    pub async fn active_sessions(&self) -> Vec<Session> {
+        self.server.active_sessions().await
+    }
+
+    /// Send one message to a session.
+    pub async fn send_to(
+        &self,
+        message: pb::Message,
+        addr: SocketAddr,
+    ) -> Result<(), TransportError> {
+        self.server.send_message(message, addr).await
+    }
+
+    /// Remove a session that no longer satisfies stream reliability guarantees.
+    pub async fn remove_session(&self, addr: SocketAddr) {
+        self.server.remove_session(addr).await;
+    }
+
+    /// Associate a subscriber with the publisher's current server epoch.
+    pub async fn set_cursor_epoch(&self, addr: SocketAddr, epoch: Vec<u8>) {
+        self.server.sessions.set_cursor_epoch(addr, epoch).await;
+    }
+}
+
 impl SessionHandle {
     /// Return the currently active sessions.
     pub async fn active_sessions(&self) -> Vec<Session> {
@@ -121,7 +168,7 @@ impl SessionState {
         }
     }
 
-    async fn set_session(&self, addr: SocketAddr, client_uuid: String) {
+    async fn set_session(&self, addr: SocketAddr, client_uuid: String, role: pb::ClientRole) {
         let mut by_addr = self.by_addr.lock().await;
         let mut by_client_uuid = self.by_client_uuid.lock().await;
 
@@ -135,9 +182,64 @@ impl SessionState {
                 addr,
                 client_uuid_hex: client_uuid,
                 last_seen_secs: now_secs(),
+                role,
+                cursor_subscribed: false,
+                cursor_requested_hz: 30.0,
+                cursor_event_ack: 0,
+                cursor_epoch: Vec::new(),
                 last_seen_at: Instant::now(),
             },
         );
+    }
+
+    async fn subscribe_cursor(&self, addr: SocketAddr, requested_hz: f64) -> bool {
+        let mut by_addr = self.by_addr.lock().await;
+        let Some(session) = by_addr.get_mut(&addr) else {
+            return false;
+        };
+        if session.role != pb::ClientRole::CursorSubscriber {
+            return false;
+        }
+        session.cursor_subscribed = true;
+        session.cursor_requested_hz = requested_hz;
+        true
+    }
+
+    async fn acknowledge_cursor_event(
+        &self,
+        addr: SocketAddr,
+        epoch: Option<&pb::Uuid>,
+        sequence: u64,
+    ) -> bool {
+        let mut by_addr = self.by_addr.lock().await;
+        let Some(session) = by_addr.get_mut(&addr) else {
+            return false;
+        };
+        if session.role != pb::ClientRole::CursorSubscriber
+            || !session.cursor_subscribed
+            || epoch.is_none_or(|value| value.value != session.cursor_epoch)
+            || sequence != session.cursor_event_ack.wrapping_add(1)
+        {
+            return false;
+        }
+        session.cursor_event_ack = sequence;
+        true
+    }
+
+    async fn set_cursor_epoch(&self, addr: SocketAddr, epoch: Vec<u8>) {
+        if let Some(session) = self.by_addr.lock().await.get_mut(&addr) {
+            if session.role == pb::ClientRole::CursorSubscriber {
+                session.cursor_epoch = epoch;
+            }
+        }
+    }
+
+    async fn role(&self, addr: SocketAddr) -> Option<pb::ClientRole> {
+        self.by_addr
+            .lock()
+            .await
+            .get(&addr)
+            .map(|session| session.role)
     }
 
     async fn remove_by_addr(&self, addr: SocketAddr) {
@@ -264,9 +366,9 @@ impl Server {
         Ok(self.socket.local_addr()?)
     }
 
-    /// Register or replace a session for the given address and client UUID.
-    pub async fn set_session(&self, addr: SocketAddr, client_uuid: String) {
-        self.sessions.set_session(addr, client_uuid).await;
+    /// Register or replace a session for the given address, UUID, and role.
+    pub async fn set_session(&self, addr: SocketAddr, client_uuid: String, role: pb::ClientRole) {
+        self.sessions.set_session(addr, client_uuid, role).await;
     }
 
     /// Remove the session associated with the given address.
@@ -277,6 +379,15 @@ impl Server {
     /// Return the list of currently active sessions.
     pub async fn active_sessions(&self) -> Vec<Session> {
         self.sessions.list().await
+    }
+
+    /// Send one protobuf message through the shared server socket.
+    pub async fn send_message(
+        &self,
+        message: pb::Message,
+        addr: SocketAddr,
+    ) -> Result<(), TransportError> {
+        self.send_to(message, addr).await
     }
 }
 
@@ -334,10 +445,18 @@ impl ServerRuntime {
                                                 pb::request_command::Kind::Handshake(hs) => {
                                                     let valid_version = hs.version == PROTOCOL_VERSION;
                                                     if valid_version {
-                                                        if let Some(uuid) = client_uuid {
-                                                            recv_server.set_session(addr, uuid).await;
+                                                        let role = pb::ClientRole::try_from(hs.role)
+                                                            .unwrap_or(pb::ClientRole::Unspecified);
+                                                        if role == pb::ClientRole::Unspecified {
+                                                            ack_to_send = Some(make_err_for_request(
+                                                                req,
+                                                                pb::ErrorCode::InvalidState,
+                                                                "handshake role must be producer or cursor_subscriber",
+                                                            ));
+                                                        } else if let Some(uuid) = client_uuid {
+                                                            recv_server.set_session(addr, uuid, role).await;
+                                                            ack_to_send = Some(make_ack_for_request(req));
                                                         }
-                                                        ack_to_send = Some(make_ack_for_request(req));
                                                     } else {
                                                         ack_to_send = Some(make_err_for_request(
                                                             req,
@@ -349,12 +468,55 @@ impl ServerRuntime {
                                                 pb::request_command::Kind::Heartbeat(_) => {
                                                     ack_to_send = Some(make_ack_for_request(req));
                                                 }
-                                                _ => {}
+                                                pb::request_command::Kind::CursorSubscribe(value) => {
+                                                    if !value.requested_hz.is_finite() || value.requested_hz <= 0.0 {
+                                                        ack_to_send = Some(make_err_for_request(
+                                                            req,
+                                                            pb::ErrorCode::InvalidState,
+                                                            "requested cursor rate must be finite and greater than zero",
+                                                        ));
+                                                    } else if recv_server
+                                                        .sessions
+                                                        .subscribe_cursor(addr, value.requested_hz)
+                                                        .await
+                                                    {
+                                                        ack_to_send = Some(make_ack_for_request(req));
+                                                    } else {
+                                                        ack_to_send = Some(make_err_for_request(
+                                                            req,
+                                                            pb::ErrorCode::InvalidState,
+                                                            "cursor subscription requires a subscriber handshake",
+                                                        ));
+                                                    }
+                                                }
+                                                pb::request_command::Kind::CursorEventAck(value) => {
+                                                    let _ = recv_server.sessions
+                                                        .acknowledge_cursor_event(
+                                                            addr,
+                                                            value.server_epoch.as_ref(),
+                                                            value.event_sequence,
+                                                        )
+                                                        .await;
+                                                }
+                                                pb::request_command::Kind::AircraftEvent(_) => {
+                                                    if recv_server.sessions.role(addr).await
+                                                        != Some(pb::ClientRole::Producer)
+                                                    {
+                                                        ack_to_send = Some(make_err_for_request(
+                                                            req,
+                                                            pb::ErrorCode::InvalidState,
+                                                            "only producer sessions may upload aircraft events",
+                                                        ));
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                     Some(pb::message::Envelope::Response(_)) => {
                                         // Server side ignores inbound responses from clients.
+                                    }
+                                    Some(pb::message::Envelope::ServerPush(_)) => {
+                                        // Server pushes are never accepted from clients.
                                     }
                                     None => {
                                         warn!(target: "fly_ruler_proto_core.transport", addr = %addr, "received message with empty envelope");
@@ -367,7 +529,19 @@ impl ServerRuntime {
                                     }
                                 }
 
-                                pending_events.push_back((msg, addr));
+                                let is_producer_event = matches!(
+                                    &msg.envelope,
+                                    Some(pb::message::Envelope::Request(pb::Request {
+                                        command: Some(pb::RequestCommand {
+                                            kind: Some(pb::request_command::Kind::AircraftEvent(_)),
+                                        }),
+                                        ..
+                                    }))
+                                ) && recv_server.sessions.role(addr).await
+                                    == Some(pb::ClientRole::Producer);
+                                if is_producer_event {
+                                    pending_events.push_back((msg, addr));
+                                }
                                 while let Some((ev, source)) = pending_events.pop_front() {
                                     (recv_handler)(ev, source);
                                 }
@@ -395,6 +569,27 @@ impl ServerRuntime {
         SessionHandle {
             state: self.server.sessions.clone(),
         }
+    }
+
+    /// Return a cloneable handle for server-originated cursor pushes.
+    pub fn publisher_handle(&self) -> ServerPublisherHandle {
+        ServerPublisherHandle {
+            server: Arc::clone(&self.server),
+        }
+    }
+
+    /// Send one message to an active session.
+    pub async fn send_to(
+        &self,
+        message: pb::Message,
+        addr: SocketAddr,
+    ) -> Result<(), TransportError> {
+        self.server.send_message(message, addr).await
+    }
+
+    /// Remove one active session.
+    pub async fn remove_session(&self, addr: SocketAddr) {
+        self.server.remove_session(addr).await;
     }
 
     /// Stop the server runtime and close the socket.
@@ -428,5 +623,40 @@ mod tests {
         session.last_seen_secs = 0.0;
 
         assert!(!session.is_expired(60.0));
+    }
+
+    #[tokio::test]
+    async fn cursor_acknowledgements_cannot_skip_unsent_event_sequences() {
+        let state = SessionState::new();
+        let addr = "127.0.0.1:18003".parse().unwrap();
+        let epoch = vec![0x42; 16];
+        state
+            .set_session(
+                addr,
+                "subscriber".to_string(),
+                pb::ClientRole::CursorSubscriber,
+            )
+            .await;
+        assert!(state.subscribe_cursor(addr, 30.0).await);
+        state.set_cursor_epoch(addr, epoch.clone()).await;
+
+        assert!(
+            !state
+                .acknowledge_cursor_event(
+                    addr,
+                    Some(&pb::Uuid {
+                        value: epoch.clone()
+                    }),
+                    2,
+                )
+                .await
+        );
+        assert_eq!(state.list().await[0].cursor_event_ack, 0);
+        assert!(
+            state
+                .acknowledge_cursor_event(addr, Some(&pb::Uuid { value: epoch }), 1)
+                .await
+        );
+        assert_eq!(state.list().await[0].cursor_event_ack, 1);
     }
 }

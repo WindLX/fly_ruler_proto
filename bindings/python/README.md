@@ -370,8 +370,8 @@ AI 模式下可能不会完整驱动座舱/HUD/插件动画，建议先用 stock
 ```python
 from fly_ruler_proto_python import PROTOCOL_VERSION, get_protocol_version
 
-print(PROTOCOL_VERSION)           # "0.3.0"
-print(get_protocol_version())     # "0.3.0"
+print(PROTOCOL_VERSION)           # "0.4.0"
+print(get_protocol_version())     # "0.4.0"
 ```
 
 版本号来自 `fly_ruler_proto_core::PROTOCOL_VERSION`，所有绑定共享同一来源。
@@ -474,7 +474,7 @@ build-backend = "maturin"
 
 [project]
 name = "fly_ruler_proto_python"
-version = "0.3.0"
+version = "0.4.0"
 requires-python = ">=3.10"
 ```
 

@@ -15,15 +15,21 @@ cargo run -p fly_ruler_proto_server
 cargo run -p fly_ruler_proto_server -- --config ./deploy/server.toml
 ```
 
-TOML 使用与当前 core `RuntimeConfig` 对齐的 `transport`、`management`、`playback` 和 `logging` section：
+TOML 使用与当前 core `RuntimeConfig` 对齐的 `transport`、`cursor_stream`、`management`、`playback` 和 `logging` section：
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [transport]
 udp_listen = "127.0.0.1:18002"
 heartbeat_interval_secs = 5
 heartbeat_timeout_secs = 15
+
+[cursor_stream]
+publish_hz = 30.0
+max_subscribers = 16
+reconnect_initial_secs = 0.5
+reconnect_max_secs = 5.0
 
 [management]
 enabled = true
@@ -48,6 +54,8 @@ level = "info"
 cargo run -p fly_ruler_proto_server -- \
   --config ./fly-ruler-server.toml \
   --udp-listen 0.0.0.0:18002 \
+  --cursor-publish-hz 30 \
+  --max-subscribers 16 \
   --http-listen 0.0.0.0:18003 \
   --log-level debug
 ```

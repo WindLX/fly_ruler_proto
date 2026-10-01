@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::RuntimeConfig;
+use crate::cursor::CursorStreamRuntime;
 use crate::logging::init_logging;
 use crate::management::{IngestionGate, ManagementError, ManagementServerRuntime};
 use crate::playback::PlaybackController;
@@ -45,6 +46,7 @@ pub struct KernelRuntime {
     ingestion: Arc<IngestionGate>,
     sessions: Arc<RwLock<Option<SessionHandle>>>,
     udp_runtime: Option<ServerRuntime>,
+    cursor_runtime: Option<CursorStreamRuntime>,
     management_runtime: Option<ManagementServerRuntime>,
 }
 
@@ -69,6 +71,7 @@ impl KernelRuntime {
             ingestion: Arc::new(IngestionGate::new()),
             sessions: Arc::new(RwLock::new(None)),
             udp_runtime: None,
+            cursor_runtime: None,
             management_runtime: None,
         }
     }
@@ -112,8 +115,17 @@ impl KernelRuntime {
         })
         .await?;
 
+        let cursor_runtime = CursorStreamRuntime::start(
+            runtime.publisher_handle(),
+            Arc::clone(&self.store),
+            Arc::clone(&self.playback),
+            self.config.cursor_stream.clone(),
+            self.config.cursor_stream.stale_timeout,
+        )?;
+
         *self.sessions.write().await = Some(runtime.session_handle());
         self.udp_runtime = Some(runtime);
+        self.cursor_runtime = Some(cursor_runtime);
         info!(target: "fly_ruler_proto_core.runtime", addr = addr, "UDP server runtime started");
         Ok(())
     }
@@ -121,6 +133,10 @@ impl KernelRuntime {
     /// Stop the UDP server runtime, if one is running.
     pub async fn stop_server(&mut self) {
         info!(target: "fly_ruler_proto_core.runtime", "stopping UDP server runtime");
+
+        if let Some(mut cursor) = self.cursor_runtime.take() {
+            cursor.stop().await;
+        }
 
         if let Some(mut runtime) = self.udp_runtime.take() {
             if let Err(e) = runtime.stop().await {
@@ -237,6 +253,7 @@ mod tests {
                         client_uuid: Some(pb::Uuid {
                             value: vec![0x22; 16],
                         }),
+                        role: pb::ClientRole::Producer as i32,
                     })),
                 }),
             })),

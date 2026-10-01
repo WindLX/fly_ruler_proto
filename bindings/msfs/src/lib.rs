@@ -11,12 +11,7 @@ pub mod simconnect;
 pub mod smoothing;
 
 /// Reserved FlyRuler custom events understood by the MSFS bridge.
-pub mod events {
-    /// Retract the landing gear through the MSFS gear handle.
-    pub const GEAR_UP: &str = "flyruler.control.gear_up";
-    /// Extend the landing gear through the MSFS gear handle.
-    pub const GEAR_DOWN: &str = "flyruler.control.gear_down";
-}
+pub use fly_ruler_proto_core::events;
 
 /// A pose expressed using writable MSFS simulation variables.
 #[derive(Debug, Clone, Copy, PartialEq)]

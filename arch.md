@@ -146,7 +146,7 @@ Planned improvements:
 
 ## 7. Non-Goals (Current Iteration)
 
-- No additional protocol schema changes beyond the unreleased 0.3.0 cleanup.
+- No lobby, authentication, encryption, NAT traversal, relay, or client prediction in the 0.4.0 cursor-room protocol.
 - No immediate switch to a different primary transport.
 - No hidden autosave behavior in core runtime.
 - No interpolation, reverse playback, looping, authentication, or server-side
@@ -155,9 +155,9 @@ Planned improvements:
 
 ## 8. Compatibility Notes
 
-- Bindings use the same high-level kernel/runtime operations while exposing the final 0.3.0 state schema directly, without legacy state-field shims.
+- Bindings use protocol 0.4.0. Producers upload aircraft data; receive-only cursor subscribers consume authoritative multi-aircraft frames and reliable event baselines without legacy shims.
 - Future published protocol changes should prefer additive fields and reserve removed protobuf field numbers and names.
 - The MSFS binding is an out-of-process Windows sidecar. It reuses the UDP
   kernel under Proton and keeps SimConnect-specific FFI outside `core`.
-- The Godot binding embeds one `KernelRuntime` on a dedicated worker thread. Its `FlyRulerRuntime` node publishes immutable, playback-revision-consistent frame snapshots on the Godot main thread and embeds the same Web management console as the daemon and MSFS bridge.
+- In server role the Godot binding embeds one `KernelRuntime` on a dedicated worker thread. In client role it owns no store or management service and publishes the room server's immutable cursor frames through the same main-thread snapshot API.
 - Rendering interpolation, NED/FRD-to-engine coordinate conversion, model binding, HUD logic, and flight dynamics remain outside the Godot binding.
