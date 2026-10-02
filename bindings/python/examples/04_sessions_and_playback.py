@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""连续的圆周飞行演示。
+"""连续的圆周飞行，配合控制台观察回放与时间轴。
+
+对应使用手册 `docs/guide/06-sessions.md`。
 
 用法：
 
-    uv run python examples/06_circle_demo.py --duration 30
-    uv run python examples/06_circle_demo.py --radius 600 --speed 80 --event-every 5
+    uv run python examples/04_sessions_and_playback.py --duration 30
+    uv run python examples/04_sessions_and_playback.py --radius 600 --speed 80 --event-every 5
 
-这是最接近真实使用方式的示例：一架飞机在水平面内做匀速圆周运动，姿态只含
-偏航、角速度恒定，周期性发送自定义事件标记飞行阶段。它适合配合控制台一起
-观察时间序列曲线与回放时间轴。
+一架飞机在水平面内做匀速圆周运动，姿态只含偏航、角速度恒定，周期性发送自定义
+事件标记飞行阶段。运行期间在控制台打开这架飞机，除了时间序列曲线，还可以用回放
+控制与时间轴查看整段会话以及事件标记；``--duration 0`` 表示一直运行到中断。
+
+服务端不可达时打印中文原因并以退出码 1 结束；``Ctrl-C`` 会走完 ``finally``
+关闭客户端后退出。
 """
 
 from __future__ import annotations
@@ -53,7 +58,7 @@ def build_state(elapsed_s: float, config: MotionConfig):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="连续的圆周飞行演示")
+    parser = argparse.ArgumentParser(description="连续的圆周飞行与回放观察")
     parser.add_argument("--address", default="127.0.0.1:18002", help="服务端 UDP 地址")
     parser.add_argument("--aircraft", default="CircleDemo", help="飞机显示名")
     parser.add_argument("--hz", type=float, default=30.0, help="上报频率 [Hz]")
@@ -79,6 +84,10 @@ def main() -> int:
     args = parse_args()
     if args.hz <= 0:
         raise SystemExit("--hz 必须大于 0")
+    if args.duration < 0:
+        raise SystemExit("--duration 不能为负")
+    if args.radius <= 0:
+        raise SystemExit("--radius 必须大于 0")
 
     running = True
 
@@ -137,6 +146,7 @@ def main() -> int:
                 else:
                     next_tick = time.monotonic()
         finally:
+            # 结束时补一个标记事件，方便在时间轴上定位会话末尾。
             client.create_event("demo.finished", timestamp=time.time())
 
     print(f"共上报 {sent} 帧，连接已关闭。")

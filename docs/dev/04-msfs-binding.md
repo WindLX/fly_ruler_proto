@@ -60,9 +60,12 @@
 
 新增一个写回通道需要四处对齐：`pb` 字段（`core/proto/fly_ruler.proto`）、`frame_from_state()` 的读取映射（`bindings/msfs/src/lib.rs:388`）、`frame_control_values()` 的展开（`bindings/msfs/src/lib.rs:576`）或 `GearEventTracker` 的事件边沿（`bindings/msfs/src/lib.rs:198`），以及 `BridgeConfig` 里是否需要新开关。只改前三处通常会导致接口能通、模拟器无反应。
 
+配套的可运行示例是 `bindings/python/examples/02_control_msfs.py` 与 `bindings/python/examples/06_ai_fleet_msfs.py`，清单与运行方式见 `bindings/python/examples/README.md`。
+
 ## 相关页面
 
-- [MSFS 桥接使用](/guide/components/proto/06-msfs-bridge)
-- [架构与分层](/dev/components/proto/01-architecture)
-- [wire schema 与协议版本](/dev/components/proto/02-wire-schema)
-- [扩展点与验证](/dev/components/proto/09-extending)
+- [架构总览](01-architecture.md)
+- [wire schema 与兼容规则](advanced/wire-schema.md)
+- [扩展点与验证](05-extending.md)
+- [内核分层与并发](advanced/kernel-concurrency.md)
+- `docs/guide/02-quickstart.md`

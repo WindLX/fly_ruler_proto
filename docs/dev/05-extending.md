@@ -49,9 +49,17 @@ MSFS 桥要同时改读取映射与写回展开：`frame_from_state()`（`bindin
 
 改动跨语言时最容易漏的是文档：公开面变化要同步更新 `docs/dev/` 对应章节与 `docs/dev/api.md` 的对象表，接口参考页由源码 docstring 生成，改完注释需要重新生成。
 
+## 七、易漏项
+
+- Python 公开面变化时 `_core.pyi` 与 `bindings/python/examples/` 要一起改，示例里的字段名与函数签名不一致不会在 Rust 侧报错。
+- Godot 与 MSFS 的字段读取改动要在各自平台上跑一次 clippy，它们不进默认的 `just check` 路径。
+- 管理端点新增后前端要同步 `web/src/types.ts` 与 `web/src/api.ts`，否则接口已通但界面读不到新字段。
+- 协议字段的语义变化要同时更新本手册对应章节与 `docs/dev/api.md` 的对象表，避免文档描述与线格式脱节。
+
 ## 相关页面
 
-- [wire schema 与协议版本](/dev/components/proto/02-wire-schema)
-- [UDP 会话语义](/dev/components/proto/03-udp-session)
-- [Python 绑定实现](/dev/components/proto/06-python-binding)
-- [接口参考](/dev/components/proto/api)
+- [wire schema 与兼容规则](advanced/wire-schema.md)
+- [UDP 会话与可靠性](advanced/udp-session.md)
+- [Python 绑定](02-python-binding.md)
+- [内核分层与并发](advanced/kernel-concurrency.md)
+- [接口参考](api.md)

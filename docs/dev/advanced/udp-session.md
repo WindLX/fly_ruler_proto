@@ -1,5 +1,7 @@
 # UDP 会话与可靠性
 
+这一页面向协议实现者与二次开发者，讲会话登记、心跳、ACK 与游标流的可靠性边界；只用 Python client 的用户请读使用手册 `docs/guide/01-install.md`。
+
 一个飞行模型进程对应一个 `AircraftClient`，它把无连接的 UDP 数据报包装成一条有生命周期语义的会话：先握手登记身份，再用 spawn 声明飞机与遥测流，之后持续投递状态、事件与遥测帧并用心跳维持登记，最后以 despawn 或 close 结束（`core/src/transport/client.rs:295`）。服务端不持有客户端连接，只按源地址维护一张会话表，会话何时消失取决于心跳是否按时到达，因此客户端要区分被确认的写入与尽力而为的写入。
 
 ## 连接与握手
@@ -99,11 +101,11 @@ Python 绑定把这条会话包成 `FlyRulerClient`：构造函数先校验心�
 
 UDP 通路没有重传与确认，除了握手那 1 秒的等待之外，状态、事件与遥测都是尽力而为：数据报丢失、乱序或超长被丢弃时客户端收不到任何通知，服务端也不会要求补发。唯一的顺序保证来自单条发送队列，跨进程不成立。握手之后客户端不再读取套接字，服务端的错误响应与心跳 ACK 都止步于内核缓冲区。
 
-服务端会忽略客户端发来的 `Response` 与 `ServerPush` 信封，未握手地址的数据报也不会建立会话（`core/src/transport/server.rs:514-521`）。需要可靠、可重放的推送时应改用游标流：它按序号分片、按事件重传并逐条确认，细节见 [回放与游标](/guide/components/proto/04-playback)。
+服务端会忽略客户端发来的 `Response` 与 `ServerPush` 信封，未握手地址的数据报也不会建立会话（`core/src/transport/server.rs:515-521`）。需要可靠、可重放的推送时应改用游标流：它按序号分片、按事件重传并逐条确认，回放侧的操作见 `docs/guide/06-sessions.md`。
 
 ## 相关页面
 
-- [架构与分层](/dev/components/proto/01-architecture)：core 分层与数据流
-- [Python 绑定实现](/dev/components/proto/06-python-binding)：关闭语义如何映射到 Python 异常
-- [接口参考](/dev/components/proto/api)：传输层与绑定的公开名字
-- [Python API 参考](/api/proto/)：逐条签名
+- [架构总览](../01-architecture.md)：core 分层与数据流
+- [Python 绑定](../02-python-binding.md)：关闭语义如何映射到 Python 异常
+- [内核分层与并发](kernel-concurrency.md)：会话表、过期清理与接收队列的位置
+- [接口参考](../api.md)：传输层与绑定的公开名字

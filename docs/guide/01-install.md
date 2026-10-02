@@ -1,135 +1,75 @@
-# 安装与快速开始
+# 安装与准备
 
-FlyRuler proto 提供 Rust 数据内核、独立的 UDP 与管理服务进程，以及 Python、Godot、MSFS 三套绑定；组件全貌见 [proto 组件概览](/guide/components/proto)。
+本手册面向使用 FlyRuler 协议栈的人：用 Python 客户端把飞机状态推出去，让服务端接收、存储、展示，并驱动 Microsoft Flight Simulator 2024 里的飞机。日常使用中最重要的是 MSFS 桥自带的服务端，它既把状态写进模拟器，又在同一个端口上托管 web console。Rust 内核、wire schema 与各绑定的内部实现属于维护者话题，只放在开发手册里，例如 `docs/dev/01-architecture.md` 与 `docs/dev/advanced/wire-schema.md`。
 
-最常用的入门路径是：安装 Python 绑定、启动 `fly-ruler-server`、用 `FlyRulerClient` 把一架飞机的状态推给服务端。
+## 三件套
 
-## 安装 Rust 内核 crate
+| 组件 | 名字 | 职责 |
+| --- | --- | --- |
+| 客户端库 | `fly_ruler_proto_python` | Python 侧的 `FlyRulerClient`，把你构造的飞机状态打包成 UDP 报文推出去，用法见 `04-control.md` |
+| 服务端 / 桥 | `fly-ruler-server`、`fly-ruler-msfs-bridge` | 接收状态、写入时间序列、提供 HTTP 与 WebSocket 管理接口；桥额外把状态写进 MSFS 2024 |
+| 控制台 | `web/dist` | 随服务端同源托管的 Vue 前端，浏览器打开管理端口即可使用 |
 
-```toml
-[dependencies]
-fly_ruler_proto_core = "0.4"
-```
+桥与服务端共用同一个数据内核和管理服务，二者的 HTTP 接口都监听 `127.0.0.1:18003`（`bindings/msfs/src/bridge.rs:38-45`）。
 
-用 `cargo add fly_ruler_proto_core` 即可添加依赖，包名与该 crate 的库名一致（`core/Cargo.toml:2`）。
+## 用桥还是用独立服务端
 
-协议的语义版本以常量的形式导出，值为 `"0.4.0"`（`core/src/lib.rs:34`）。
+只有要让 MSFS 2024 里的飞机跟着数据动，才需要桥。桥的 UDP 接收端口默认 `127.0.0.1:18002`，管理端口默认 `127.0.0.1:18003`，会话数据写在 `sessions/`，控制台资源取自 `web/dist`。
 
-```rust
-use fly_ruler_proto_core::PROTOCOL_VERSION;
+不接模拟器时用独立服务端 `fly-ruler-server` 就够了：它接收同一套 UDP 报文，提供同一套管理接口，默认监听 `127.0.0.1:18002` 与 `127.0.0.1:18003`（`server/src/config.rs:146`、`:157`），数据目录默认 `sessions`，控制台目录默认 `web/dist`（`server/src/config.rs:161`、`:167`）。
 
-fn main() {
-    println!("protocol {PROTOCOL_VERSION}");
-}
-```
+两者的客户端代码完全一样，你可以在不接模拟器时用独立服务端调协议，接上模拟器时换成桥。
 
-工作区版本号定义在 `Cargo.toml:6`，并由 `just set-version` 同步到内核与 Web 包。
+## 平台前提
 
-> 注册表上可安装到的版本可能低于当前源码版本。握手会校验两端的协议版本必须一致（`core/src/transport/server.rs:445-467`），所以客户端与服务端要取自同一版本。
+Windows 10/11 可以直接运行桥：解压发布包后执行 `fly-ruler-msfs-bridge.exe`，SimConnect 由本机的 MSFS 2024 提供。
 
-## 安装 Python 绑定
+Linux 上桥以 Windows 可执行文件的形式运行，由 Steam 版 Microsoft Flight Simulator 2024 的 Proton 兼容层承载，Steam AppID 是 2537590；发布包里的那个 exe 在 Linux 上原样使用，不需要重新编译。
 
-```bash
-python -m pip install fly_ruler_proto_python
-```
+桥的完整逻辑只在 Windows 目标上编译，其它目标编译出的程序会打印 `fly-ruler-msfs-bridge must be built for x86_64-pc-windows-msvc and run under Proton` 并以状态码 2 退出（`bindings/msfs/src/main.rs:10-24`）。
 
-分发名为 `fly_ruler_proto_python`（`bindings/python/pyproject.toml:2`），运行时要求 Python 3.12 或更新（`bindings/python/pyproject.toml:9`）。
+Python 侧要求 3.12 或更高（`bindings/python/pyproject.toml:9`）。
 
-安装后可直接运行同名命令，它会打印协议版本与全部公开导出项：
+## 路线一：安装已发布的产物
 
-```bash
-fly_ruler_proto_python
-```
+只想尽快用起来就装预编译产物：
 
-该入口定义在 `bindings/python/pyproject.toml:12-13`，实现见 `bindings/python/src/fly_ruler_proto_python/__init__.py:61-71`。公开面包含 14 个名字，例如 `FlyRulerClient`、`create_aircraft_state`、`Attitude`、`TelemetryStreamSchema`。
+1. 安装 Python 客户端库：`python -m pip install fly-ruler-proto-python`。发行包名在 pip 里会做归一化处理，写连字符或下划线都能装；导入时始终写 `import fly_ruler_proto_python`。
+2. 到 GitHub Release 页面取两个压缩包：给 MSFS 桥用的 `fly-ruler-msfs-windows-x86_64.zip`，给独立服务端用的 `fly-ruler-server-linux-x86_64.tar.gz`。
+3. 解压后分别得到 `fly-ruler-msfs/` 与 `fly-ruler-server/` 目录，里面各有桥或服务端的可执行文件，并都带 `web/dist/` 控制台资源和示例 TOML 配置。
+4. 运行：独立服务端在 `fly-ruler-server/` 目录里执行 `./fly-ruler-server`；桥在 Windows 上运行 `fly-ruler-msfs-bridge.exe`，在 Linux 上执行 `protontricks-launch --appid 2537590 ./fly-ruler-msfs-bridge.exe`（`justfile:158-159`）。
 
-## 从源码安装
+客户端与桥（或独立服务端）的 `PROTOCOL_VERSION` 必须严格相等，否则握手会被拒绝：服务端在握手分支里比较版本，不一致时回 `ProtocolVersionMismatch` 错误码与文本 `protocol version mismatch`（`core/src/transport/server.rs:445-467`）。当前值在本仓中是 `0.4.0`（`core/src/lib.rs:34`、`Cargo.toml:6`）。因此 Python 包与桥/服务端压缩包要从同一个 Release tag 取；跨版本混用一定连不上。
 
-克隆仓库后在 `packages/fly_ruler_proto` 下执行：
+## 路线二：从源码构建
 
-```bash
-just setup
-```
+在 `packages/fly_ruler_proto` 目录内依次执行：
 
-`setup` 由 `_setup-python` 与 `_setup-web` 组成（`justfile:9`）：前者在 `bindings/python` 里跑 `uv sync --all-groups`（`justfile:79-80`），后者在 `web` 里跑 `pnpm install`（`justfile:82-83`）。本机需要 Rust 工具链、uv 与 pnpm。
+1. `just setup` 安装 Python 与 Web 依赖（`justfile:12`）。
+2. `just build` 构建 Rust workspace 与控制台产物（`justfile:24`）。
+3. `cd bindings/python && uv sync --all-groups && uv run maturin develop` 装好本地 Python 绑定（等价于 `justfile:82-83` 与 `justfile:139-140`）。
 
-| 命令 | 作用 |
-| --- | --- |
-| `just check` | 版本一致性加上 Rust、Python、Web 三面的检查（`justfile:15`） |
-| `just test` | 三套测试；Python 那套会先跑 `maturin develop`（`justfile:18`、`:127`） |
-| `just build` | `cargo build --workspace` 与控制台静态资源（`justfile:21`） |
-| `just fmt` | 三面的格式化落盘（`justfile:12`） |
-| `just pre-commit` | 依次执行 `fmt`、`check`、`test`（`justfile:73`） |
+如果要自己交叉编译桥，Linux 上还需要准备这些前置条件：
 
-开发控制台时用 `just dev`：不带参数会同时启动服务端与 Vite 开发服务器，`just dev server` 只起服务端，`just dev web` 只起前端（`justfile:24-45`）。
+- `cargo install cargo-xwin`；
+- `rustup target add x86_64-pc-windows-msvc`；
+- 系统里有 `llvm-lib`，发行版常把它装在带版本号的名字下，需要自己建一个不带版本号的入口，例如 `sudo ln -sf /usr/bin/llvm-lib-18 /usr/local/bin/llvm-lib`；
+- `uv tool install protontricks`，用来在 Proton 里启动 exe。
 
-## 启动服务端
+构建脚本还需要 MSFS 2024 SimConnect SDK：它优先把环境变量 `MSFS2024_SDK` 当作 SDK 根，没有设置时回落到 `<manifest>/../../.msfs2024-sdk/MSFS 2024 SDK`（`bindings/msfs/build.rs:5-14`），其中 `manifest` 是 `bindings/msfs`，所以回落路径正好是本仓根下的 `.msfs2024-sdk/MSFS 2024 SDK`。SDK 里必须有 `SimConnect SDK/include/SimConnect.h`、`SimConnect SDK/lib/SimConnect.lib` 和 `SimConnect SDK/lib/SimConnect.dll`，缺任何一个构建脚本都会报 `missing MSFS 2024 SDK file: ... (set MSFS2024_SDK to the SDK root)`（`bindings/msfs/build.rs:33-39`）。准备好之后 `just msfs build` 会用 `cargo xwin` 交叉编译到 `x86_64-pc-windows-msvc`（`justfile:148-149`）。
 
-```bash
-just dev server
-```
+源码构建完成后不必先打包就能跑：`just dev server` 直接运行独立服务端（`justfile:31-32`），适合不接模拟器时调协议；`just dev all` 会同时起服务端与 Vite 开发服务器（`justfile:37-42`）。桥则走 `just msfs run`，它假定你已经用 `just msfs build` 生成了 debug 产物。
 
-它等价于 `cargo run -p fly_ruler_proto_server`（`justfile:28-29`），也可以直接运行编译好的 `fly-ruler-server` 二进制。
+## 确认两端版本一致
 
-默认监听 UDP `127.0.0.1:18002` 与管理接口 `127.0.0.1:18003`（`server/src/config.rs:143-157`）。配置可以来自命令行参数，也可以来自配置文件：当前目录下的 `fly-ruler-server.toml` 会被自动读取（`server/src/config.rs:11`，`server/src/config.rs:122-129`），完整模板见 `server/fly-ruler-server.example.toml`。
+装完先对一下协议版本，再连：
 
-```toml
-schema_version = 2
+- Python 客户端：`cd bindings/python && uv run fly_ruler_proto_python`，第一行是 `fly_ruler_proto_python 协议版本：...`（`bindings/python/src/fly_ruler_proto_python/__init__.py:60-67`）。也可以写 `python -c "import fly_ruler_proto_python as f; print(f.PROTOCOL_VERSION)"`。
+- 桥或独立服务端：启动之后请求 `curl -s http://127.0.0.1:18003/api/v1/health`，返回 `{"status":"ok","protocol_version":"...","api_version":"v1"}`（`core/src/management/routes.rs:75-80`）。
 
-[transport]
-udp_listen = "127.0.0.1:18002"
-
-[management]
-enabled = true
-listen = "127.0.0.1:18003"
-```
-
-`schema_version` 必须等于 2（`core/src/config.rs:9`）。日志级别设为 `info` 时，启动过程会打印 `UDP server runtime started`（`core/src/kernel.rs:129`）与 `management server started`（`core/src/management/server.rs:276`）。
-
-服务起来后先用健康检查确认：
-
-```bash
-curl -s http://127.0.0.1:18003/api/v1/health
-# {"status":"ok","protocol_version":"0.4.0","api_version":"v1"}
-```
-
-## 最小 Python 客户端
-
-下面的脚本连接服务端、生成一架飞机、更新一次状态，并在退出时关闭会话：
-
-```python
-from fly_ruler_proto_python import FlyRulerClient, create_aircraft_state
-
-with FlyRulerClient("127.0.0.1:18002", "quickstart") as aircraft:
-    state = create_aircraft_state(
-        position=(100.0, 0.0, -1000.0),
-        velocity=(200.0, 0.0, 0.0),
-        angular_velocity=(0.0, 0.0, 0.05),
-    )
-    aircraft.update_state(state)
-    print("aircraft_uuid:", aircraft.aircraft_uuid)
-```
-
-构造 `FlyRulerClient` 时会建立 UDP 会话并完成握手，握手等待 ACK 的上限是 1 秒（`core/src/transport/client.rs:18`，`core/src/transport/client.rs:276-287`）；`with` 块退出时调用 `close()`，若之前没有显式 despawn，会补发一条 reason 为 `client_close` 的 despawn（`core/src/transport/client.rs:626-634`）。
-
-`update_state(state)` 不传时间戳时由客户端填当前 Unix 秒（`core/src/transport/client.rs:36-46`）。
-
-这段代码要求服务端已经在 `127.0.0.1:18002` 上监听 UDP：服务端没启动时构造会直接抛出连接异常，构造失败不会留下半初始化实例（`bindings/python/src/fly_ruler_proto_python/client.py:86-89`）。
-
-确认数据已到达服务端：
-
-```bash
-curl -s http://127.0.0.1:18003/api/v1/aircraft
-```
-
-状态更新的时间戳语义、心跳与关闭顺序见 [客户端连接与状态更新](/guide/components/proto/02-client-connection)。
-
-配套的可运行示例是 `bindings/python/examples/01_connect.py`；示例清单与运行方式见 `bindings/python/examples/README.md`。
+两处输出必须完全一样。如果只改了其中一处版本号，`just check` 里的 `_check-version` 会抓住 `Cargo.toml`、`core/src/lib.rs` 与 `web/package.json` 三处不一致并报错（`justfile:98-112`）。
 
 ## 相关页面
 
-- [客户端连接与状态更新](/guide/components/proto/02-client-connection)
-- [遥测与时间序列](/guide/components/proto/03-telemetry)
-- [UDP 会话与错误处理](/dev/components/proto/03-udp-session)
-- [proto 组件概览](/guide/components/proto)
-- [协议 API 参考](/api/proto/)
+- [五分钟跑通](02-quickstart.md)
+- [排障](07-troubleshooting.md)

@@ -159,7 +159,7 @@ _msfs-run *ARGS:
     protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe {{ARGS}}
 
 _msfs-example *ARGS:
-    cd bindings/python && uv run python examples/07_msfs_client.py {{ARGS}}
+    cd bindings/python && uv run python examples/02_control_msfs.py {{ARGS}}
 
 _msfs-example-ai *ARGS:
-    cd bindings/python && uv run python examples/08_msfs_ai_fleet.py {{ARGS}}
+    cd bindings/python && uv run python examples/06_ai_fleet_msfs.py {{ARGS}}

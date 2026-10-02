@@ -1,4 +1,6 @@
-# Wire schema 与协议版本
+# wire schema 与兼容规则
+
+这一页面向协议实现者与二次开发者，讲 schema 的生成链路、字段编号规则与版本兼容判定；只用 Python client 的用户请读使用手册 `docs/guide/01-install.md`。
 
 `core/proto/fly_ruler.proto` 是 FlyRuler Proto 的 wire schema 唯一事实源，包名 `flyruler`（`core/proto/fly_ruler.proto:3`）。Rust 类型、各语言绑定与字段说明都以它为准，字段编号一旦发布不再复用。
 
@@ -97,8 +99,9 @@ proto3 下字段编号是线格式身份，删除的编号不能复用，新增�
 
 ## 相关页面
 
-- [架构总览](/dev/components/proto/01-architecture)：core 分层与数据流
-- [UDP 会话与可靠性](/dev/components/proto/03-udp-session)：握手如何携带版本、ACK 与重传
-- [遥测与时间序列](/guide/components/proto/03-telemetry)：产出方如何声明流并发送样本
-- [接口参考](/dev/components/proto/api)：绑定公开面与 core 模块
-- [Python API 参考](/api/proto/)：协议类型签名
+- [架构总览](../01-architecture.md)：core 分层与数据流
+- [UDP 会话与可靠性](udp-session.md)：握手如何携带版本、ACK 与重传
+- [管理服务与 HTTP/WS 路由](management-api.md)：字段落库后如何被查询与推送
+- [接口参考](../api.md)：绑定公开面与 core 模块
+- `docs/guide/05-telemetry.md`：产出方如何声明流并发送样本
+- `docs/guide/01-install.md`：安装与快速开始

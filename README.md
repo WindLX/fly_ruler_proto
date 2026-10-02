@@ -75,11 +75,11 @@ with FlyRulerClient("127.0.0.1:18002", "F-16") as aircraft:
 
 ## 示例
 
-`bindings/python/examples/` 按由简到繁排列，从连接与推送状态，到事件、遥测、多机并发、圆周飞行，再到 MSFS 桥接与 AI 机队；每个脚本对应 `docs/guide/` 的一章。阅读顺序与运行前提见 `bindings/python/examples/README.md`。
+`bindings/python/examples/` 按由简到繁排列，从连接与推送状态、MSFS 控制，到事件与遥测、会话与回放，再到多机并发与 AI 机队；每个脚本对应 `docs/guide/` 的一章。阅读顺序与运行前提见 `bindings/python/examples/README.md`。
 
 ## 文档与开发
 
-- 用户手册：`docs/guide/` —— 安装、连接、遥测、回放、服务与控制台、MSFS 桥接与排障。
+- 用户手册：`docs/guide/` —— 安装、快速开始、控制台、控制、遥测、会话、排障与独立服务端。
 - 开发者手册：`docs/dev/` —— 架构与分层、wire schema、UDP 会话、存储与回放、服务与管理接口、各语言绑定实现、扩展点与验证。
 - 接口参考：`docs/dev/api.md` —— Python 公开面与 Rust 公开模块的索引，签名细节见自动生成的 API 参考。
 - 发布流程：`RELEASING.md` —— 版本修改、门禁、打标签与各分发渠道的发布步骤。

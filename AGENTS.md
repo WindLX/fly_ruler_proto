@@ -11,14 +11,14 @@ FlyRuler protobuf/UDP 协议与数据内核：Rust 内核与服务器、Python/G
 - `server/` —— UDP 接收与 HTTP/WS 管理服务，二进制 `fly-ruler-server`
 - `bindings/` —— `python`、`godot`、`msfs` 三套绑定
 - `web/` —— Vue 3 控制台前端
-- `examples/` —— 由简到繁的协议示例，阅读顺序见 `bindings/python/examples/README.md`
+- `bindings/python/examples/` —— 由简到繁的协议示例，阅读顺序见 `bindings/python/examples/README.md`
 - `docs/` —— 用户手册（`docs/guide/`）与开发者手册（`docs/dev/`）
 
 ## 文档
 
 - **约定**：正本在 `docs/guide/`、`docs/dev/`；根站 `docs/{guide,dev}/components/proto/` 下的同名页面只是 `<!--@include-->` 壳页，改内容改本目录，新增章节时同时建壳页并在 `docs/.vitepress/config.mts` 登记侧边栏。
-- **约定**：面向使用者写安装、连接、状态与事件、遥测、回放、服务与控制台、MSFS 桥接与排障，面向开发者写架构、wire schema、UDP 会话、存储与回放、服务与管理接口、各绑定实现、扩展点与验证；中文散文，段落单行不手工折行，跨页链接用站点绝对路径，行为结论带源码位置（`core/src/...:行号`）。
-- **禁止**：正文写主站文档站的结构与转发关系，也不写写作规则、完成状态、进度与占位内容；本仓自己的命令与验证入口是读者需要的内容，可以写。
+- **约定**：面向使用者写八章（安装与准备、五分钟跑通、控制台、控制飞行、遥测与图表、会话与回放、排障、独立服务端），面向开发者写架构总览、Python 绑定、控制台前端、MSFS 绑定、扩展点与 `advanced/` 高级专题（wire schema、UDP 会话、存储与回放、管理接口、内核并发）；中文散文，段落单行不手工折行，同手册内用相对链接，跨手册引用写成行内代码，行为结论带源码位置（`core/src/...:行号`）。
+- **禁止**：正文写主站文档站的结构与转发关系，也不写写作规则、完成状态、进度、内部任务记录（itemark 编号）、测试与验证进度或「尚未验证」这类免责说明；本仓自己的命令与验证入口是读者需要的内容，可以写。
 - **约定**：接口参考页由生成器从源码 docstring 生成，改注释后在主仓重生成（`cd docs && just api`）；漏生成时 `cd docs && just test` 会报错。
 
 ## 本目录特有边界

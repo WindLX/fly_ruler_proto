@@ -23,7 +23,7 @@
 | `FlyRulerClient` | 绑定单架飞机生命周期的客户端 | `bindings/python/src/fly_ruler_proto_python/client.py:76` |
 | `create_aircraft_state()` | 带默认值的状态构造助手 | `bindings/python/src/fly_ruler_proto_python/client.py:35` |
 
-公开名字的构造与调用方式在 Rust 扩展模块里定义，纯 Python 层只负责补默认值与校验，分界见[Python 绑定实现](/dev/components/proto/06-python-binding)。
+公开名字的构造与调用方式在 Rust 扩展模块里定义，纯 Python 层只负责补默认值与校验，分界见 [Python 绑定](02-python-binding.md)。
 
 ### 组合方式
 
@@ -63,9 +63,9 @@ with FlyRulerClient("127.0.0.1:18002", "F-16", telemetry_schemas=[schema]) as ai
 - 遥测流的 `stream_id` 必须非空且互不重复，`nominal_rate_hz` 若给出必须是有限正数（`bindings/python/src/client.rs:94-110`）。
 - `Attitude` 只读，必须通过 `from_quaternion()`、`from_rotation_matrix()`、`from_euler()` 构造，非法输入抛 `ValueError` 而不是自动归一化（`bindings/python/src/protocol.rs:75-107`）。
 - proto3 的可选字段在 Python 侧表现为 `None`，不是零值；只有需要区分"未提供"与"零"的字段才使用可选语义。
-- 游标与回放订阅不在 Python 公开面内，需要通过管理 HTTP 接口调用，见[回放与游标](/guide/components/proto/04-playback)。
+- 游标与回放订阅不在 Python 公开面内，需要通过管理 HTTP 接口调用，操作方式见 `docs/guide/06-sessions.md`。
 
-完整签名与每个字段的单位说明见 [Python 公开面 API 参考](/api/proto/) 与[客户端模块](/api/proto/client)。
+完整签名与每个字段的单位说明见主仓生成的接口参考（`../docs/api/proto/`），改注释后在主仓用 `cd docs && just api` 重新生成。
 
 ## Rust 公开模块
 
@@ -91,7 +91,8 @@ with FlyRulerClient("127.0.0.1:18002", "F-16", telemetry_schemas=[schema]) as ai
 
 ## 相关页面
 
-- [Python 绑定实现](/dev/components/proto/06-python-binding)
-- [架构与分层](/dev/components/proto/01-architecture)
-- [wire schema 与协议版本](/dev/components/proto/02-wire-schema)
-- [示例阶梯](/guide/components/proto/01-install)
+- [Python 绑定](02-python-binding.md)
+- [架构总览](01-architecture.md)
+- [wire schema 与兼容规则](advanced/wire-schema.md)
+- [内核分层与并发](advanced/kernel-concurrency.md)
+- `docs/guide/01-install.md`

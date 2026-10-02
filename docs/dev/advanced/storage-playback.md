@@ -1,5 +1,7 @@
 # 存储与回放
 
+这一页面向协议实现者与二次开发者，讲时间序列的数据模型、分页查询、持久化文件布局与回放状态机；只用 Python client 的用户请读使用手册 `docs/guide/01-install.md`。
+
 服务端把收到的状态、事件与遥测帧全部留在内存的时间序列 store 里，回放控制器在它之上维护一条全局游标，管理面按时间窗口取数、按游标对齐推送增量（`core/src/store.rs:139`、`core/src/playback.rs:100`）。磁盘上的一次落盘是一个会话目录，由一份 `meta.json` 与三份 Parquet 文件组成。
 
 ## 内存组织
@@ -100,7 +102,9 @@ store 不对遥测帧做自动裁剪（`core/src/store.rs:101`），配置里的
 
 ## 相关页面
 
-- [架构与分层](/dev/components/proto/01-architecture)：store 与回放在 core 中的位置
-- [回放与时间轴](/guide/components/proto/04-playback)：控制台里的回放操作与时间轴
-- [服务与控制台](/guide/components/proto/05-server-and-console)：会话保存与数据根目录的用法
-- [接口参考](/dev/components/proto/api)：`TimeSeriesStore` 与 `PlaybackController` 的公开方法
+- [架构总览](../01-architecture.md)：store 与回放在 core 中的位置
+- [内核分层与并发](kernel-concurrency.md)：整表写锁、摄取闸门与一致性快照
+- [管理服务与 HTTP/WS 路由](management-api.md)：这些查询与持久化操作的 HTTP 入口
+- [接口参考](../api.md)：`TimeSeriesStore` 与 `PlaybackController` 的公开方法
+- `docs/guide/06-sessions.md`：控制台里的回放操作与时间轴
+- `docs/guide/06-sessions.md`：会话保存与数据根目录的用法

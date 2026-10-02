@@ -33,6 +33,18 @@
 
 `stores/series.ts` 管时间序列数据：按曲线签名分别缓存目录与数据（`web/src/stores/series.ts:8-16`），并用请求代数丢弃过期响应。长时间序列靠两级处理保持流畅：`downsampleSeriesData()`（`:128`）用 LTTB 把点数压到上限，`mergeSeriesData()`（`:179`）把增量帧合并进已有序列并按时间戳去重，保证回放拖动与实时追加都不会出现重复点。
 
+## 推送分发
+
+`connect()` 建立 WebSocket 后按消息类型分发：`snapshot` 更新飞机列表、状态、回放快照与时间线（`web/src/stores/server.ts:83`），`operation_status` 更新持久化操作记录（`web/src/stores/server.ts:117`），`store_changed` 触发数据重取（`web/src/stores/server.ts:125`），`workspace_changed` 交给工作区的远端修订处理（`web/src/stores/server.ts:131`）。
+
+## 多语言与快捷键
+
+`web/src/i18n.ts` 用 `createI18n` 建实例，全部界面文案放在 `messages` 里（`web/src/i18n.ts:3`、`web/src/i18n.ts:361`）。
+
+播放快捷键在 `usePlaybackShortcuts()` 里注册（`web/src/usePlaybackShortcuts.ts:13`），键位到动作的映射由 `playbackShortcutFor()` 决定（`web/src/shortcuts.ts:8`），输入框内不劫持按键由 `isEditableTarget()` 判断（`web/src/shortcuts.ts:33`）。
+
+`togglePlaybackAction()` 把当前回放模式映射成播放或暂停动作，因此同一个空格键在 live 与 replay 下语义一致（`web/src/shortcuts.ts:42`）。
+
 ## 构建、测试与调试
 
 `pnpm check` 串起 `format:check`、`lint`、`test`、`build`（`web/package.json:15`）；`build` 先跑 `vue-tsc -b` 做类型检查再 `vite build`（`web/package.json:9`）。单元测试用 Vitest，运行在 node 环境（`web/vite.config.ts:38-40`），覆盖运行配置解析、快捷键、多语言、工具函数与三个 store（`web/src/stores/stores.test.ts`）。
@@ -45,7 +57,8 @@
 
 ## 相关页面
 
-- [服务端的 HTTP 与 WebSocket 接口](/dev/components/proto/05-server-http-ws)
-- [服务端与控制台使用](/guide/components/proto/05-server-and-console)
-- [时间序列存储与回放](/dev/components/proto/04-storage-playback)
-- [接口参考](/dev/components/proto/api)
+- [管理服务与 HTTP/WS 路由](advanced/management-api.md)
+- [存储与回放](advanced/storage-playback.md)
+- [架构总览](01-architecture.md)
+- [接口参考](api.md)
+- `docs/guide/03-console.md`

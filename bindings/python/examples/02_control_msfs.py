@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """喂给 MSFS 桥接的地理航迹。
 
+对应使用手册 `docs/guide/04-control.md`，其中的「五分钟跑通」直接运行这条命令。
+
 用法：
 
-    uv run python examples/07_msfs_client.py --duration 30
-    uv run python examples/07_msfs_client.py --latitude 31.1434 --engine-count 2
+    uv run python examples/02_control_msfs.py --duration 30
+    uv run python examples/02_control_msfs.py --latitude 31.1434 --engine-count 2
 
 脚本围绕一个经纬度中心点做小半径圆周飞行，除位置与姿态外还上报
 ``DerivedState``（经纬高、真空速、航向）、控制面偏度与发动机油门，这些量正是
-MSFS 桥接用来驱动飞机视觉状态的部分。桥接本身只在 Windows/Proton 上运行，
-因此连接失败时脚本只提示并以退出码 0 结束，方便在没有模拟器的机器上试跑。
+MSFS 桥接用来驱动飞机视觉状态的部分。桥接本身只在 Windows/Proton 上运行，本机
+没有服务端时脚本打印中文原因并以退出码 1 结束。
 """
 
 from __future__ import annotations
@@ -134,6 +136,8 @@ def main() -> int:
     args = parse_args()
     if args.hz <= 0:
         raise SystemExit("--hz 必须大于 0")
+    if args.duration < 0:
+        raise SystemExit("--duration 不能为负")
     if args.engine_count <= 0:
         raise SystemExit("--engine-count 必须大于 0")
     if args.radius <= 0:
@@ -166,8 +170,8 @@ def main() -> int:
         )
     except ConnectionError as error:
         print(f"连接失败：{error}")
-        print("MSFS 桥接只在 Windows/Proton 上运行，本机没有服务端时示例直接结束。")
-        return 0
+        print("确认服务端或 MSFS 桥接已启动（just dev server / just msfs run）。")
+        return 1
 
     with client:
         print(f"aircraft_uuid={client.aircraft_uuid}，{args.hz:g} Hz")

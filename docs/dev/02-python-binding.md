@@ -1,4 +1,4 @@
-# Python 绑定实现
+# Python 绑定
 
 Python 绑定分三层：Rust 扩展模块 `fly_ruler_proto_python._core`、纯 Python 封装 `fly_ruler_proto_python.client`、以及手写类型存根 `_core.pyi`。理解这三层的分界，就能判断一个新字段应该加在哪里、为什么公开类的构造体验和 Rust 侧不一样。
 
@@ -51,9 +51,11 @@ Python 绑定分三层：Rust 扩展模块 `fly_ruler_proto_python._core`、纯 
 
 Rust 侧转换有单元测试（`bindings/python/src/protocol.rs:578` 起）。Python 行为测试在 `bindings/python/tests/test_core.py`，覆盖协议版本、状态构造、遥测声明校验与客户端生命周期；它同时是公开面回归，改名或删除导出会直接失败。
 
+可运行的示例在 `bindings/python/examples/`，从 `01_connect_and_push.py`、`02_control_msfs.py`、`03_events_and_telemetry.py`、`04_sessions_and_playback.py`、`05_multi_aircraft.py` 到 `06_ai_fleet_msfs.py` 由简到繁，清单与运行方式见 `bindings/python/examples/README.md`。
+
 ## 相关页面
 
-- [接口参考](/dev/components/proto/api)
-- [Python 公开面 API 参考](/api/proto/)
-- [UDP 会话语义](/dev/components/proto/03-udp-session)
-- [遥测与时间序列](/guide/components/proto/03-telemetry)
+- [接口参考](api.md)
+- [UDP 会话与可靠性](advanced/udp-session.md)
+- `docs/guide/05-telemetry.md`
+- `docs/guide/04-control.md`

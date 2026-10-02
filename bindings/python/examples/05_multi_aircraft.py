@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """同时驱动多架飞机。
 
+对应使用手册 `docs/guide/03-console.md`。
+
 用法：
 
     uv run python examples/05_multi_aircraft.py
     uv run python examples/05_multi_aircraft.py --count 5 --duration 8 --radius 800
 
-每个 ``FlyRulerClient`` 只代表一架飞机，多机就是多个客户端。脚本把飞机均匀
-放在同一个圆周上，相位各不相同，然后在同一个循环里逐架上报状态；退出时按
-创建顺序逐架关闭，避免留下悬挂的心跳线程。
+每个 ``FlyRulerClient`` 只代表一架飞机，多机就是多个客户端。脚本把飞机均匀放在
+同一个圆周上，相位各不相同，然后在同一个循环里逐架上报状态；控制台会把这些飞机
+并排列出，可以逐架选择字段对比曲线。``--duration 0`` 表示一直运行到中断；退出时
+按创建顺序逐架关闭，避免留下悬挂的心跳线程。
+
+服务端不可达时打印中文原因并以退出码 1 结束；``Ctrl-C`` 会走完 ``finally``
+关闭全部客户端后退出。
 """
 
 from __future__ import annotations
@@ -63,7 +69,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hz", type=float, default=20.0, help="每架飞机的上报频率 [Hz]"
     )
-    parser.add_argument("--duration", type=float, default=6.0, help="运行时长 [s]")
+    parser.add_argument(
+        "--duration", type=float, default=6.0, help="运行时长 [s]，0 表示一直运行"
+    )
     parser.add_argument("--radius", type=float, default=500.0, help="编队半径 [m]")
     parser.add_argument("--altitude", type=float, default=1500.0, help="高度 [m]")
     return parser.parse_args()
@@ -75,6 +83,8 @@ def main() -> int:
         raise SystemExit("--count 必须大于 0")
     if args.hz <= 0:
         raise SystemExit("--hz 必须大于 0")
+    if args.duration < 0:
+        raise SystemExit("--duration 不能为负")
 
     running = True
 
@@ -116,7 +126,7 @@ def main() -> int:
     try:
         while running:
             elapsed = time.monotonic() - start
-            if elapsed >= args.duration:
+            if args.duration > 0 and elapsed >= args.duration:
                 break
 
             timestamp = time.time()

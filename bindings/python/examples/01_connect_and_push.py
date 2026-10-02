@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""按固定频率上报飞机状态。
+"""连接服务端、打印会话标识并按固定频率推送状态。
+
+对应使用手册 `docs/guide/02-quickstart.md`。
 
 用法：
 
-    uv run python examples/02_state_update.py
-    uv run python examples/02_state_update.py --hz 20 --duration 10 --speed 120
+    uv run python examples/01_connect_and_push.py
+    uv run python examples/01_connect_and_push.py --hz 20 --duration 10 --speed 120
+    uv run python examples/01_connect_and_push.py --duration 0
 
-飞机沿机体前方匀速直线飞行，同时以固定爬升率上升。每一帧都用
-``create_aircraft_state`` 重新构造状态快照，再交给 ``update_state`` 上报；
-时间戳取 ``time.time()``，服务端按这个值写入时间序列。
+脚本先完成握手，打印协议版本与两个会话 UUID，随后飞机沿机体前方匀速直线飞行，
+同时以固定爬升率上升，按 ``--hz``（默认 30）上报状态，持续 ``--duration`` 秒；
+``--duration 0`` 表示一直上报到中断。每一帧都用 ``create_aircraft_state`` 重新
+构造状态快照，再交给 ``update_state``，时间戳取 ``time.time()``，服务端按这个
+值写入时间序列。
+
+服务端不可达时打印中文原因并以退出码 1 结束；``Ctrl-C`` 会走完 ``finally``
+关闭客户端后退出。
 """
 
 from __future__ import annotations
@@ -19,7 +27,13 @@ import signal
 import time
 from dataclasses import dataclass
 
-from fly_ruler_proto_python import Attitude, FlyRulerClient, create_aircraft_state
+from fly_ruler_proto_python import (
+    PROTOCOL_VERSION,
+    Attitude,
+    FlyRulerClient,
+    create_aircraft_state,
+    get_protocol_version,
+)
 
 
 @dataclass(frozen=True)
@@ -52,11 +66,13 @@ def build_state(elapsed_s: float, config: FlightConfig):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="按固定频率上报飞机状态")
+    parser = argparse.ArgumentParser(description="连接服务端并推送飞机状态")
     parser.add_argument("--address", default="127.0.0.1:18002", help="服务端 UDP 地址")
-    parser.add_argument("--aircraft", default="StraightRunner", help="飞机显示名")
+    parser.add_argument("--aircraft", default="Probe", help="飞机显示名")
     parser.add_argument("--hz", type=float, default=30.0, help="上报频率 [Hz]")
-    parser.add_argument("--duration", type=float, default=5.0, help="运行时长 [s]")
+    parser.add_argument(
+        "--duration", type=float, default=5.0, help="上报时长 [s]，0 表示一直上报"
+    )
     parser.add_argument("--speed", type=float, default=90.0, help="地速 [m/s]")
     parser.add_argument("--climb", type=float, default=5.0, help="爬升率 [m/s]")
     parser.add_argument("--heading", type=float, default=45.0, help="航向角 [deg]")
@@ -67,8 +83,8 @@ def main() -> int:
     args = parse_args()
     if args.hz <= 0:
         raise SystemExit("--hz 必须大于 0")
-    if args.duration <= 0:
-        raise SystemExit("--duration 必须大于 0")
+    if args.duration < 0:
+        raise SystemExit("--duration 不能为负")
 
     running = True
 
@@ -85,7 +101,12 @@ def main() -> int:
         heading_rad=math.radians(args.heading),
     )
 
+    print(f"PROTOCOL_VERSION={PROTOCOL_VERSION}")
+    print(f"get_protocol_version()={get_protocol_version()}")
+    print(f"连接 {args.address} ...")
+
     try:
+        # 构造客户端即完成握手与注册，地址不可达时抛 ConnectionError。
         client = FlyRulerClient(
             args.address,
             args.aircraft,
@@ -93,8 +114,11 @@ def main() -> int:
         )
     except ConnectionError as error:
         print(f"连接失败：{error}")
-        print("确认服务端已启动（just dev server）。")
+        print("确认服务端已启动（just dev server），并检查地址与协议版本是否一致。")
         return 1
+
+    print(f"client_uuid={client.client_uuid}")
+    print(f"aircraft_uuid={client.aircraft_uuid}")
 
     period = 1.0 / args.hz
     start = time.monotonic()
@@ -104,11 +128,10 @@ def main() -> int:
     try:
         while running:
             elapsed = time.monotonic() - start
-            if elapsed >= args.duration:
+            if args.duration > 0 and elapsed >= args.duration:
                 break
 
-            state = build_state(elapsed, config)
-            client.update_state(state, timestamp=time.time())
+            client.update_state(build_state(elapsed, config), timestamp=time.time())
             sent += 1
 
             if sent % max(int(args.hz), 1) == 0:

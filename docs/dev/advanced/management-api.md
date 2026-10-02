@@ -1,4 +1,6 @@
-# 管理服务与 HTTP/WS 接口
+# 管理服务与 HTTP/WS 路由
+
+这一页面向协议实现者与二次开发者，逐条列出管理路由、请求体、错误码与 WebSocket 推送帧；只用 Python client 的用户请读使用手册 `docs/guide/01-install.md`。
 
 `fly-ruler-server` 进程在同一个数据内核上开两个监听：UDP 端口接收飞行模型上报，管理端口提供 REST 与 WebSocket。管理面本身是 core 里的一个模块，server 只负责把配置翻译成内核配置并决定是否启用它（`server/src/main.rs:18-36`）。
 
@@ -125,7 +127,8 @@ CORS 层只放行配置中的来源，方法限 GET、POST、PUT，请求头限 
 
 ## 相关页面
 
-- [架构与分层](/dev/components/proto/01-architecture)：内核、传输与管理面的分工
-- [服务与控制台](/guide/components/proto/05-server-and-console)：配置项与控制台用法
-- [接口参考](/dev/components/proto/api)：管理模块的公开类型
-- [HTTP 接口参考](/api/proto/)：按端点生成的请求与响应说明
+- [架构总览](../01-architecture.md)：内核、传输与管理面的分工
+- [内核分层与并发](kernel-concurrency.md)：共享状态怎么交给管理面、停机顺序与持久化操作队列
+- [存储与回放](storage-playback.md)：路由背后的数据模型与回放状态机
+- [接口参考](../api.md)：管理模块的公开类型
+- `docs/guide/03-console.md`：配置项与控制台用法

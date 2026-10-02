@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """为 MSFS 桥接构造一支 AI 飞机编队。
 
+对应使用手册 `docs/guide/04-control.md`。
+
 用法：
 
-    uv run python examples/08_msfs_ai_fleet.py --fleet-size 4 --duration 30
-    uv run python examples/08_msfs_ai_fleet.py --latitude 31.1434 --spacing 0.004
+    uv run python examples/06_ai_fleet_msfs.py --fleet-size 4 --duration 30
+    uv run python examples/06_ai_fleet_msfs.py --latitude 31.1434 --spacing 0.004
 
-每架飞机是一个独立客户端，围绕各自的经纬度中心做小半径圆周飞行，编队成员
-沿东西向等距排开、相位错开。桥接开启 AI 飞机开关后会用这些飞机创建模拟器里
-的 AI 机队，因此这里的状态除了位置、姿态、派生量之外还包含控制面与发动机。
-与 07 一样，连接失败时以退出码 0 结束。
+每架飞机是一个独立客户端，围绕各自的经纬度中心做小半径圆周飞行，编队成员沿东西
+向等距排开、相位错开。桥接开启 AI 飞机开关后会用这些飞机创建模拟器里的 AI 机队，
+因此这里的状态除了位置、姿态、派生量之外还包含控制面与发动机。桥接本身只在
+Windows/Proton 上运行，本机没有服务端时脚本打印中文原因并以退出码 1 结束；
+``Ctrl-C`` 会走完 ``finally`` 关闭全部客户端后退出。
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ class LeaderConfig:
 def build_state(elapsed_s: float, config: LeaderConfig, index: int, count: int):
     """构造编队中第 index 架飞机的状态快照。"""
     omega = config.speed_mps / max(config.radius_m, 1e-6)
-    # 相邻成员相位错开半个队形间隔，避免所有飞机同时转向。
+    # 相邻成员相位错开，避免所有飞机同时转向。
     phase = omega * elapsed_s + 2.0 * math.pi * index / max(count, 1)
 
     latitude_center = (
@@ -136,6 +139,10 @@ def main() -> int:
         raise SystemExit("--fleet-size 必须大于 0")
     if args.hz <= 0:
         raise SystemExit("--hz 必须大于 0")
+    if args.duration < 0:
+        raise SystemExit("--duration 不能为负")
+    if args.engine_count <= 0:
+        raise SystemExit("--engine-count 必须大于 0")
 
     running = True
 
@@ -172,10 +179,10 @@ def main() -> int:
             print(f"{name} 已连接 aircraft_uuid={clients[-1].aircraft_uuid}")
     except ConnectionError as error:
         print(f"连接失败：{error}")
-        print("MSFS 桥接只在 Windows/Proton 上运行，本机没有服务端时示例直接结束。")
+        print("确认服务端或 MSFS 桥接已启动（just dev server / just msfs run）。")
         for client in clients:
             client.close()
-        return 0
+        return 1
 
     period = 1.0 / args.hz
     start = time.monotonic()
