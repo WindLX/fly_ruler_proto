@@ -23,11 +23,36 @@ from fly_ruler_proto_python import (
 engine = TelemetryStreamSchema(
     stream_id="engine",
     fields=[
-        TelemetryField("n1", label="N1", group="engine", unit="%", value_type=TelemetryValueType.F64),
-        TelemetryField("egt", label="EGT", group="engine", unit="°C", value_type=TelemetryValueType.F64),
-        TelemetryField("fuel_kg", label="Fuel", group="engine", unit="kg", value_type=TelemetryValueType.F64),
-        TelemetryField("mode", label="Mode", group="engine", value_type=TelemetryValueType.I64),
-        TelemetryField("gear_down", label="Gear down", group="engine", value_type=TelemetryValueType.Bool),
+        TelemetryField(
+            "n1",
+            label="N1",
+            group="engine",
+            unit="%",
+            value_type=TelemetryValueType.F64,
+        ),
+        TelemetryField(
+            "egt",
+            label="EGT",
+            group="engine",
+            unit="°C",
+            value_type=TelemetryValueType.F64,
+        ),
+        TelemetryField(
+            "fuel_kg",
+            label="Fuel",
+            group="engine",
+            unit="kg",
+            value_type=TelemetryValueType.F64,
+        ),
+        TelemetryField(
+            "mode", label="Mode", group="engine", value_type=TelemetryValueType.I64
+        ),
+        TelemetryField(
+            "gear_down",
+            label="Gear down",
+            group="engine",
+            value_type=TelemetryValueType.Bool,
+        ),
     ],
     name="Engine",
     nominal_rate_hz=10.0,

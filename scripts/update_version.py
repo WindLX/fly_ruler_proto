@@ -72,10 +72,18 @@ def main() -> int:
         SystemExit: 版本号非法或找不到待更新的版本字段时。
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="New semantic version, with or without leading v")
-    parser.add_argument("--dry-run", action="store_true", help="Show files that would change")
-    parser.add_argument("--no-locks", action="store_true", help="Do not update Cargo.lock/uv.lock")
-    parser.add_argument("--no-docs", action="store_true", help="Do not update README snippets")
+    parser.add_argument(
+        "version", help="New semantic version, with or without leading v"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show files that would change"
+    )
+    parser.add_argument(
+        "--no-locks", action="store_true", help="Do not update Cargo.lock/uv.lock"
+    )
+    parser.add_argument(
+        "--no-docs", action="store_true", help="Do not update README snippets"
+    )
     args = parser.parse_args()
 
     new_version = normalize_version(args.version)
@@ -283,7 +291,9 @@ def update_web_package_json(new_version: str) -> Edit:
     return Edit(path, before, after)
 
 
-def update_docs(old_version: str, old_protocol_version: str, new_version: str) -> list[Edit]:
+def update_docs(
+    old_version: str, old_protocol_version: str, new_version: str
+) -> list[Edit]:
     """为文档与测试中出现的版本片段生成替换。
 
     Args:
@@ -311,8 +321,12 @@ def update_docs(old_version: str, old_protocol_version: str, new_version: str) -
             continue
         before = path.read_text(encoding="utf-8")
         after = before.replace(f"v{old_version}", f"v{new_version}")
-        after = after.replace(f'version = "{old_version}"', f'version = "{new_version}"')
-        after = after.replace(f'"version": "{old_version}"', f'"version": "{new_version}"')
+        after = after.replace(
+            f'version = "{old_version}"', f'version = "{new_version}"'
+        )
+        after = after.replace(
+            f'"version": "{old_version}"', f'"version": "{new_version}"'
+        )
         after = after.replace(
             f'PROTOCOL_VERSION = "{old_protocol_version}"',
             f'PROTOCOL_VERSION = "{new_version}"',

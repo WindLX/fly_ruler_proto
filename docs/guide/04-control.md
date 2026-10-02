@@ -11,8 +11,13 @@ import math
 import time
 
 from fly_ruler_proto_python import (
-    Attitude, ControlSurfaceState, DerivedState, FlyRulerClient,
-    PropulsorKind, PropulsorState, create_aircraft_state,
+    Attitude,
+    ControlSurfaceState,
+    DerivedState,
+    FlyRulerClient,
+    PropulsorKind,
+    PropulsorState,
+    create_aircraft_state,
 )
 
 
@@ -26,11 +31,17 @@ def frame(elapsed_s):
         angular_velocity=(0.0, 0.0, 0.14),
         derived=DerivedState(lat=31.1434, lon=121.8052, altitude=1200.0, tas=70.0),
         control_surfaces=ControlSurfaceState(
-            aileron_left_rad=0.12, aileron_right_rad=-0.12,
-            elevator_rad=0.0, rudder_rad=0.0,
-            flaps_left_ratio=0.0, flaps_right_ratio=0.0, spoilers_ratio=0.0,
+            aileron_left_rad=0.12,
+            aileron_right_rad=-0.12,
+            elevator_rad=0.0,
+            rudder_rad=0.0,
+            flaps_left_ratio=0.0,
+            flaps_right_ratio=0.0,
+            spoilers_ratio=0.0,
         ),
-        propulsors=[PropulsorState("engine.1", kind=PropulsorKind.JET, throttle_ratio=0.6)],
+        propulsors=[
+            PropulsorState("engine.1", kind=PropulsorKind.JET, throttle_ratio=0.6)
+        ],
     )
 
 
