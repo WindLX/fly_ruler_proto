@@ -15,7 +15,7 @@ setup: _setup-python _setup-web
 fmt: _fmt-rust _fmt-python _fmt-web
 
 # Check Rust, Python, and Web surfaces, plus version consistency.
-check: _check-version _check-rust _check-python _check-web
+check: _check-version _check-rust _check-python _check-web _check-scripts
 
 # Run every test suite.
 test: _test-rust _test-python _test-web
@@ -124,6 +124,9 @@ _check-python:
 _check-web:
     cd web && pnpm check
 
+_check-scripts:
+    bash -n scripts/install-msfs.sh scripts/package_msfs_bundle.sh
+
 _test-rust:
     cargo test --workspace
 
@@ -156,7 +159,7 @@ _msfs-package: _build-web _msfs-build-release
     cd dist && rm -f fly-ruler-msfs-windows-x86_64.zip && zip -r fly-ruler-msfs-windows-x86_64.zip fly-ruler-msfs
 
 _msfs-run *ARGS:
-    protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe {{ARGS}}
+    protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe --config {{env_var_or_default("FR_MSFS_CONFIG", "bindings/msfs/fly-ruler-msfs.dev.toml")}} {{ARGS}}
 
 _msfs-example *ARGS:
     cd bindings/python && uv run python examples/02_control_msfs.py {{ARGS}}

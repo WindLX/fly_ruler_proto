@@ -208,7 +208,7 @@ fn resolve(args: Args) -> Result<ServerConfig, Box<dyn std::error::Error>> {
         level: args
             .log_level
             .or(file.logging.level)
-            .unwrap_or_else(|| "warn".to_string()),
+            .unwrap_or_else(|| "info".to_string()),
         file_path: args
             .log_file
             .or(file.logging.file_path)

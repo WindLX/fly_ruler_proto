@@ -44,6 +44,8 @@ Linux + Proton 下机型和涂装包要放进模拟器前缀里的用户数据�
 
 同一时间只跑一个占用这些端口的进程；需要并行时改桥配置里的 `listen` 和管理面 `listen`，或给独立服务端传 `--udp-listen` 与 `--http-listen`。
 
+先看清是谁占着：`ss -lntup | grep -E '18002|18003'`；如果之前用 `systemctl --user start fly-ruler-msfs` 起过桥，`systemctl --user status fly-ruler-msfs` 能看出它是不是还在跑。
+
 ## Linux + Proton 下启动失败
 
 桥的 Windows 产物必须在 Proton 下运行，直接在 Linux 上执行会打印 `fly-ruler-msfs-bridge must be built for x86_64-pc-windows-msvc and run under Proton` 并以退出码 2 结束（`bindings/msfs/src/main.rs:10-24`）。
@@ -51,6 +53,20 @@ Linux + Proton 下机型和涂装包要放进模拟器前缀里的用户数据�
 确认拿到的是 `x86_64-pc-windows-msvc` 目标的 exe，再通过 `protontricks-launch --appid 2537590` 一类方式在 MSFS 的 Proton 前缀里启动。
 
 protontricks 提示缺少 `winetricks` 只是警告，桥本身的运行不依赖它。
+
+## 安装脚本装出来的桥
+
+提示 `fly-ruler-msfs: command not found` 时，`~/.local/bin` 不在 `PATH` 里：把 `export PATH="$HOME/.local/bin:$PATH"` 写进 shell 配置，再开一个新终端。
+
+启动命令里记的是安装那一刻 `protontricks-launch` 的绝对路径（`scripts/install-msfs.sh`）；先装 protontricks 再装桥，或者装完 protontricks 后重跑一次安装脚本。
+
+配置在 `~/.config/fly-ruler-msfs/fly-ruler-msfs.toml`，里面的路径都是绝对路径；改完重启桥即生效，重跑安装脚本不会覆盖这份文件。
+
+用 `systemctl --user start fly-ruler-msfs` 启动时日志进 journal，跟日志用 `journalctl --user -u fly-ruler-msfs -f`，停止用 `systemctl --user stop fly-ruler-msfs`。这个 unit 故意没有 `[Install]` 段，`systemctl --user enable` 会失败：桥不是常驻服务，只在需要连模拟器时临时启动。
+
+升级就是再跑一次安装脚本：新版本装进 `~/.local/share/fly-ruler-msfs/versions/`，`current` 软链原子指向它，旧版本仍在原地；想回退就把 `current` 指回旧目录。
+
+卸载用 `curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
 
 ## 控制台打不开或空白
 
@@ -66,11 +82,11 @@ protontricks 提示缺少 `winetricks` 只是警告，桥本身的运行不依�
 
 `RUST_LOG` 环境变量覆盖配置里的 `logging.level`（`core/src/logging.rs:66-70`），未设置时读取配置。
 
-配置默认级别是 `warn`（`server/src/config.rs:207-211`，桥侧见 `bindings/msfs/src/config.rs:238-242`）。
+配置默认级别是 `info`（`server/src/config.rs:207-211`，桥侧见 `bindings/msfs/src/config.rs:238-242`，常量见 `core/src/logging.rs:13`）。
 
 常用写法是 `RUST_LOG=debug` 打开全量调试日志，`RUST_LOG=fly_ruler_proto_core=debug` 只看内核，`RUST_LOG=fly_ruler_proto_server=info` 只看服务端。
 
-日志默认写到标准错误，需要落盘时在配置里设置 `logging.file_path`。
+日志默认写到标准错误，需要落盘时在配置里设置 `logging.file_path`；安装脚本生成的配置里已经留了一行注释好的示例，取消注释即可写到 `~/.local/state/fly-ruler-msfs/bridge.log`。用 unit 启动时日志还会同时进 journal，`journalctl --user -u fly-ruler-msfs -f` 就能跟。
 
 ## 相关页面
 

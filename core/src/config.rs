@@ -154,7 +154,7 @@ pub struct LoggingFileConfig {
 impl Default for LoggingFileConfig {
     fn default() -> Self {
         Self {
-            level: "warn".to_string(),
+            level: "info".to_string(),
             file_path: String::new(),
         }
     }
@@ -261,7 +261,7 @@ pub struct LoggingConfig {
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            level: "warn".to_string(),
+            level: "info".to_string(),
             file_path: None,
         }
     }

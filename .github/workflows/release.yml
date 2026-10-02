@@ -394,6 +394,11 @@ jobs:
           pattern: msfs-bundle
           path: release-artifacts
           merge-multiple: true
+      - uses: actions/checkout@v4
+      - name: Add the install script to the release assets
+        run: |
+          install -m 0755 scripts/install-msfs.sh release-artifacts/install-msfs.sh
+          ls -l release-artifacts/
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

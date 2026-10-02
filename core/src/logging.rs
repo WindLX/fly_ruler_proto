@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 static LOGGING_INIT: OnceLock<()> = OnceLock::new();
 static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
-const DEFAULT_LOG_LEVEL: &str = "warn";
+const DEFAULT_LOG_LEVEL: &str = "info";
 
 fn build_default_filter(level: &str) -> String {
     format!(

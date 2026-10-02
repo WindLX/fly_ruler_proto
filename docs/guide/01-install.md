@@ -24,7 +24,7 @@
 
 Windows 10/11 可以直接运行桥：解压发布包后执行 `fly-ruler-msfs-bridge.exe`，SimConnect 由本机的 MSFS 2024 提供。
 
-Linux 上桥以 Windows 可执行文件的形式运行，由 Steam 版 Microsoft Flight Simulator 2024 的 Proton 兼容层承载，Steam AppID 是 2537590；发布包里的那个 exe 在 Linux 上原样使用，不需要重新编译。
+Linux 上桥以 Windows 可执行文件的形式运行，由 Steam 版 Microsoft Flight Simulator 2024 的 Proton 兼容层承载，Steam AppID 是 2537590；发布包里的那个 exe 在 Linux 上原样使用，不需要重新编译。用安装脚本装好之后，日常只需要 `fly-ruler-msfs` 这一条命令，Proton 与 AppID 都由它带好。
 
 桥的完整逻辑只在 Windows 目标上编译，其它目标编译出的程序会打印 `fly-ruler-msfs-bridge must be built for x86_64-pc-windows-msvc and run under Proton` 并以状态码 2 退出（`bindings/msfs/src/main.rs:10-24`）。
 
@@ -32,12 +32,47 @@ Python 侧要求 3.12 或更高（`bindings/python/pyproject.toml:9`）。
 
 ## 路线一：安装已发布的产物
 
-只想尽快用起来就装预编译产物：
+Python 客户端库用 pip 装：
 
-1. 安装 Python 客户端库：`python -m pip install fly-ruler-proto-python`。发行包名在 pip 里会做归一化处理，写连字符或下划线都能装；导入时始终写 `import fly_ruler_proto_python`。
-2. 到 GitHub Release 页面取两个压缩包：给 MSFS 桥用的 `fly-ruler-msfs-windows-x86_64.zip`，给独立服务端用的 `fly-ruler-server-linux-x86_64.tar.gz`。
-3. 解压后分别得到 `fly-ruler-msfs/` 与 `fly-ruler-server/` 目录，里面各有桥或服务端的可执行文件，并都带 `web/dist/` 控制台资源和示例 TOML 配置。
-4. 运行：独立服务端在 `fly-ruler-server/` 目录里执行 `./fly-ruler-server`；桥在 Windows 上运行 `fly-ruler-msfs-bridge.exe`，在 Linux 上执行 `protontricks-launch --appid 2537590 ./fly-ruler-msfs-bridge.exe`（`justfile:158-159`）。
+```bash
+python -m pip install fly-ruler-proto-python
+```
+
+发行包名在 pip 里会做归一化处理，写连字符或下划线都能装；导入时始终写 `import fly_ruler_proto_python`。
+
+Linux 上的 MSFS 桥用安装脚本装到用户空间，和常见命令行工具一样：
+
+```bash
+curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash
+```
+
+脚本从 Release 里取 `fly-ruler-msfs-windows-x86_64.zip`，校验压缩包内的 `SHA256SUMS` 之后装出这样一套目录：
+
+| 位置 | 内容 |
+| --- | --- |
+| `~/.local/share/fly-ruler-msfs/versions/<版本>/` | 桥的可执行文件、`SimConnect.dll`、控制台资源 |
+| `~/.local/share/fly-ruler-msfs/current` | 指向当前版本的软链，升级时原子替换 |
+| `~/.local/share/fly-ruler-msfs/sessions/` | 会话数据 |
+| `~/.config/fly-ruler-msfs/fly-ruler-msfs.toml` | 配置，里面的路径都是绝对路径，重装不会覆盖 |
+| `~/.local/state/fly-ruler-msfs/` | 工作目录，桥从这个目录启动 |
+| `~/.local/bin/fly-ruler-msfs` | 启动命令 |
+
+常用选项：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--version v0.4.0` | 装指定版本，默认取最新 Release |
+| `--with-service` | 额外写 `~/.config/systemd/user/fly-ruler-msfs.service`，只写文件，不 enable、不启动 |
+| `--appid 2537590` | 换一个 MSFS 的 Steam AppID |
+| `--dry-run` | 只解析版本、打印将要执行的动作，不动磁盘 |
+| `--skip-checks` | 跳过 protontricks、MSFS 目录、端口占用等环境检查 |
+| `--strict` | 把上面那些警告当成错误 |
+
+装完运行 `fly-ruler-msfs`，它会把桥送进 MSFS 的 Proton 前缀；`~/.local/bin` 不在 `PATH` 里时脚本会提示怎么加。桥不是常驻服务：先启动 MSFS 2024 并进入 Free Flight，再运行这条命令，收工按 Ctrl-C。想临时放进后台就用 `systemctl --user start fly-ruler-msfs`，它写的 unit 是按需启动的，没有 `[Install]` 段，`systemctl --user enable` 会直接失败。
+
+卸载还是这个脚本：`curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
+
+Windows 上不用安装脚本：到 GitHub Release 页面取 `fly-ruler-msfs-windows-x86_64.zip`，解压后直接运行 `fly-ruler-msfs-bridge.exe`，SimConnect 由本机的 MSFS 2024 提供。不接模拟器时另取 `fly-ruler-server-linux-x86_64.tar.gz`，解压后在 `fly-ruler-server/` 目录里执行 `./fly-ruler-server`；两个压缩包都自带 `web/dist/` 控制台资源和示例 TOML 配置。
 
 客户端与桥（或独立服务端）的 `PROTOCOL_VERSION` 必须严格相等，否则握手会被拒绝：服务端在握手分支里比较版本，不一致时回 `ProtocolVersionMismatch` 错误码与文本 `protocol version mismatch`（`core/src/transport/server.rs:445-467`）。当前值在本仓中是 `0.4.0`（`core/src/lib.rs:34`、`Cargo.toml:6`）。因此 Python 包与桥/服务端压缩包要从同一个 Release tag 取；跨版本混用一定连不上。
 
@@ -58,7 +93,7 @@ Python 侧要求 3.12 或更高（`bindings/python/pyproject.toml:9`）。
 
 构建脚本还需要 MSFS 2024 SimConnect SDK：它优先把环境变量 `MSFS2024_SDK` 当作 SDK 根，没有设置时回落到 `<manifest>/../../.msfs2024-sdk/MSFS 2024 SDK`（`bindings/msfs/build.rs:5-14`），其中 `manifest` 是 `bindings/msfs`，所以回落路径正好是本仓根下的 `.msfs2024-sdk/MSFS 2024 SDK`。SDK 里必须有 `SimConnect SDK/include/SimConnect.h`、`SimConnect SDK/lib/SimConnect.lib` 和 `SimConnect SDK/lib/SimConnect.dll`，缺任何一个构建脚本都会报 `missing MSFS 2024 SDK file: ... (set MSFS2024_SDK to the SDK root)`（`bindings/msfs/build.rs:33-39`）。准备好之后 `just msfs build` 会用 `cargo xwin` 交叉编译到 `x86_64-pc-windows-msvc`（`justfile:148-149`）。
 
-源码构建完成后不必先打包就能跑：`just dev server` 直接运行独立服务端（`justfile:31-32`），适合不接模拟器时调协议；`just dev all` 会同时起服务端与 Vite 开发服务器（`justfile:37-42`）。桥则走 `just msfs run`，它假定你已经用 `just msfs build` 生成了 debug 产物。
+源码构建完成后不必先打包就能跑：`just dev server` 直接运行独立服务端（`justfile:31-32`），适合不接模拟器时调协议；`just dev all` 会同时起服务端与 Vite 开发服务器（`justfile:37-42`）。桥则走 `just msfs run`，它假定你已经用 `just msfs build` 生成了 debug 产物，并且用仓库里的 `bindings/msfs/fly-ruler-msfs.dev.toml` 作为配置（`justfile:158-159`）；想换成自己的配置就设 `FR_MSFS_CONFIG` 指向那个文件。
 
 ## 确认两端版本一致
 

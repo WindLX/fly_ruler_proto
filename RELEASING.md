@@ -47,6 +47,7 @@ git push origin v0.5.0
 | --- | --- |
 | `fly-ruler-server-linux-x86_64.tar.gz` | `fly-ruler-server/` 目录，含服务进程、`fly-ruler-server.example.toml`、`web/dist/`、`README.md`、`LICENSE`、`RELEASING.md` |
 | `fly-ruler-msfs-windows-x86_64.zip` | `fly-ruler-msfs/` 目录，含 `fly-ruler-msfs-bridge.exe`、`SimConnect.dll`、`fly-ruler-msfs.example.toml`、`README.md`、`RELEASING.md`、`LICENSE`、`SHA256SUMS`、`web/dist/` |
+| `install-msfs.sh` | 面向用户的 MSFS 桥安装/卸载脚本，文档里的地址是 `/releases/latest/download/install-msfs.sh`，所以每个 Release 都必须带上它 |
 | Python wheel | Linux x86_64、Linux aarch64、Windows x86_64 三个 `fly_ruler_proto_python` wheel |
 | `fly_ruler_proto_core-*.crate` | 内核 crate 源码包 |
 
@@ -63,4 +64,4 @@ git push origin v0.5.0
 
 ## 七、发布后核对
 
-在 GitHub Release 页确认四类产物都在，并逐个校验：解压服务包后能直接运行 `./fly-ruler-server`，解压 MSFS 包后目录结构与上表一致，PyPI 与 crates.io 的版本页能看到新版本，控制台包内含与发布标签匹配的前端资源。
+在 GitHub Release 页确认四类产物都在，并逐个校验：解压服务包后能直接运行 `./fly-ruler-server`，解压 MSFS 包后目录结构与上表一致，PyPI 与 crates.io 的版本页能看到新版本，控制台包内含与发布标签匹配的前端资源；`install-msfs.sh` 用 `curl -fsSL .../releases/latest/download/install-msfs.sh | bash -s -- --dry-run` 能跑通。
