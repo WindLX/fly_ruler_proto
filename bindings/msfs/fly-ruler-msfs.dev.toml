@@ -31,9 +31,16 @@ listen = "127.0.0.1:18003"
 data_root = "sessions"
 web_root = "web/dist"
 ws_hz = 30.0
-# The built-in allowlist already covers the Vite dev server on 127.0.0.1:5173,
-# so nothing has to be listed here. Setting `cors_origins` would replace that
-# allowlist instead of extending it.
+# The Vite dev server on 5173 is where the console is edited, so keep its origin
+# here: when the frontend points straight at this management API the browser
+# sends an Origin and the request needs to be allowed. `web/vite.config.ts`
+# proxies /api to 18003 by default, in which case the browser stays on 5173 and
+# nothing is cross-origin; the absolute case is what this list covers.
+# Setting `cors_origins` replaces the built-in allowlist instead of extending it.
+cors_origins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]
 
 [logging]
 level = "info"
