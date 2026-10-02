@@ -20,10 +20,11 @@ web_root = "web/dist"
 # public_api_base_url = "https://sim.example.test/api/v1"
 # public_websocket_url = "wss://sim.example.test/api/v1/ws"
 websocket_hz = 30.0
-cors_origins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-]
+# The console is served by the server itself, so the browser reaches the API on
+# the same origin and no extra origin is needed; the built-in allowlist already
+# covers the usual local development ports. Set `cors_origins = ["..."]` only
+# when the frontend is hosted elsewhere, and note that it replaces the built-in
+# list instead of extending it.
 
 [playback]
 default_speed = 1.0

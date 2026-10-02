@@ -218,7 +218,8 @@ check_environment() {
     fi
   fi
   local free_kb
-  free_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')"
+  # df 在 HOME 不存在或无法 stat 时会失败；磁盘检查只是提醒，不能因此中断安装。
+  free_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')" || free_kb=""
   if [ -n "$free_kb" ] && [ "$free_kb" -lt "$MIN_FREE_KB" ]; then
     warn "home 分区剩余空间不足 200 MB，解包可能失败"
   fi
@@ -317,10 +318,9 @@ listen = "127.0.0.1:18003"
 data_root = "$PREFIX/sessions"
 web_root = "$PREFIX/current/web/dist"
 ws_hz = 30.0
-cors_origins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-]
+# 控制台由桥自己托管，浏览器与 API 同源，不需要额外的跨源来源；
+# 默认白名单已经覆盖本机的常用开发端口。真要收紧或换成别处托管的前端时，
+# 才在这里写 cors_origins = [...]，注意写了是整体替换默认值，不是追加。
 
 [logging]
 level = "info"

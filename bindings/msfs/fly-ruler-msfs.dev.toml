@@ -31,10 +31,9 @@ listen = "127.0.0.1:18003"
 data_root = "sessions"
 web_root = "web/dist"
 ws_hz = 30.0
-cors_origins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-]
+# The built-in allowlist already covers the Vite dev server on 127.0.0.1:5173,
+# so nothing has to be listed here. Setting `cors_origins` would replace that
+# allowlist instead of extending it.
 
 [logging]
 level = "info"

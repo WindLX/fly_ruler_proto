@@ -30,7 +30,9 @@
 
 模板开头的 `schema_version = 2` 标记配置结构版本（`server/fly-ruler-server.example.toml:1`），改配置格式时据此判断兼容性。
 
-`[transport]` 段管 UDP 监听与心跳周期，`[cursor_stream]` 段管游标推送频率与订阅上限，`[management]` 段示例里把 `cors_origins` 配成允许本机 5173 的开发前端（`server/fly-ruler-server.example.toml:3-26`）。
+`[transport]` 段管 UDP 监听与心跳周期，`[cursor_stream]` 段管游标推送频率与订阅上限，`[management]` 段管数据目录、前端目录与跨源来源（`server/fly-ruler-server.example.toml:3-27`）。
+
+控制台由服务端自己托管，浏览器与 API 同源，所以模板不写 `cors_origins`，用内置白名单：本机常用开发端口（3000、5173、8000、18003）都在里面（`core/src/config.rs:217-228`）。只有在别处托管前端时才需要显式配置，而写了就是整体替换内置白名单，不是追加（`server/src/config.rs:174-179`）。
 
 默认 UDP 监听 `127.0.0.1:18002`（`server/src/config.rs:143-146`），管理面监听 `127.0.0.1:18003`（`server/src/config.rs:154-157`）。
 
