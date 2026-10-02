@@ -1,6 +1,8 @@
-"""Unit tests for Fly Ruler Protocol Python Bindings (current API)."""
+"""面向当前公开面的 Python 绑定单元测试。"""
 
 from __future__ import annotations
+
+from importlib.metadata import version
 
 import pytest
 
@@ -24,7 +26,10 @@ from fly_ruler_proto_python import (
 
 
 class TestVector3:
-    def test_create_and_mutate(self):
+    """向量对象的构造与可变性。"""
+
+    def test_create_and_mutate(self) -> None:
+        """构造后三个分量可读，且可以逐字段改写。"""
         v = Vector3(1.0, 2.0, 3.0)
         assert v.x == 1.0
         assert v.y == 2.0
@@ -35,17 +40,22 @@ class TestVector3:
         v.z = 7.0
         assert (v.x, v.y, v.z) == (9.0, 8.0, 7.0)
 
-    def test_zero(self):
+    def test_zero(self) -> None:
+        """零向量工厂返回三分量全零对象。"""
         v = Vector3.zero()
         assert (v.x, v.y, v.z) == (0.0, 0.0, 0.0)
 
 
 class TestAttitude:
-    def test_identity(self):
+    """姿态对象的构造与表示互转。"""
+
+    def test_identity(self) -> None:
+        """单位姿态的四元数是 (1, 0, 0, 0)。"""
         attitude = Attitude.identity()
         assert attitude.quaternion == (1.0, 0.0, 0.0, 0.0)
 
-    def test_representations(self):
+    def test_representations(self) -> None:
+        """零欧拉角对应单位旋转矩阵，且能还原回单位四元数。"""
         attitude = Attitude.from_euler((0.0, 0.0, 0.0))
         assert attitude.rotation_matrix == (
             1.0,
@@ -67,7 +77,10 @@ class TestAttitude:
 
 
 class TestDerivedState:
-    def test_create(self):
+    """派生量的构造与字段读写。"""
+
+    def test_create(self) -> None:
+        """按关键字构造后每个分量都保留输入值。"""
         d = DerivedState(
             lat=37.7749,
             lon=-122.4194,
@@ -97,13 +110,17 @@ class TestDerivedState:
 
 
 class TestAircraftState:
-    def test_hover(self):
+    """飞机状态的构造方式与默认值。"""
+
+    def test_hover(self) -> None:
+        """悬停工厂给出零位置、零速度与单位姿态。"""
         state = AircraftState.hover()
         assert state.position.x == 0.0
         assert state.velocity.x == 0.0
         assert state.attitude.quaternion[0] == 1.0
 
-    def test_create_with_derived(self):
+    def test_create_with_derived(self) -> None:
+        """显式传入派生量时按值保存。"""
         state = AircraftState(
             position=Vector3(100.0, 200.0, -300.0),
             velocity=Vector3(1.0, 2.0, 3.0),
@@ -126,7 +143,8 @@ class TestAircraftState:
         assert state.derived is not None
         assert state.derived.tas == 250.0
 
-    def test_standard_controls_and_propulsors(self):
+    def test_standard_controls_and_propulsors(self) -> None:
+        """控制面与推进器列表按输入顺序保存。"""
         state = AircraftState(
             control_surfaces=ControlSurfaceState(
                 elevator_rad=0.1,
@@ -141,12 +159,15 @@ class TestAircraftState:
                 ),
             ],
         )
-        assert state.control_surfaces.elevator_rad == 0.1
-        assert state.control_surfaces.flaps_left_ratio == 0.5
+        surfaces = state.control_surfaces
+        assert surfaces is not None
+        assert surfaces.elevator_rad == 0.1
+        assert surfaces.flaps_left_ratio == 0.5
         assert [propulsor.index for propulsor in state.propulsors] == [1, 2]
         assert state.propulsors[1].throttle_ratio == 0.75
 
-    def test_acceleration_and_propulsor_state(self):
+    def test_acceleration_and_propulsor_state(self) -> None:
+        """机体系加速度与旋翼推进器的扩展字段可读。"""
         state = create_aircraft_state(
             linear_acceleration_body=(0.1, 0.2, -9.7),
             propulsors=[
@@ -162,7 +183,9 @@ class TestAircraftState:
                 )
             ],
         )
-        assert state.linear_acceleration_body.z == -9.7
+        acceleration = state.linear_acceleration_body
+        assert acceleration is not None
+        assert acceleration.z == -9.7
         assert state.propulsors[0].kind == PropulsorKind.ROTOR
         assert state.propulsors[0].rpm == 2400.0
         assert state.propulsors[0].index == 1
@@ -170,7 +193,10 @@ class TestAircraftState:
 
 
 class TestHelpers:
-    def test_create_aircraft_state_helper(self):
+    """高层构造助手的默认值与转发行为。"""
+
+    def test_create_aircraft_state_helper(self) -> None:
+        """助手接受的元组与对象参数都落到状态对象上。"""
         state = create_aircraft_state(
             position=(1.0, 2.0, 3.0),
             velocity=(4.0, 5.0, 6.0),
@@ -184,25 +210,30 @@ class TestHelpers:
                 )
             ],
         )
+        surfaces = state.control_surfaces
         assert state.position.x == 1.0
         assert state.velocity.y == 5.0
         assert state.attitude.quaternion[3] > 0.0
         assert state.angular_velocity.x == 0.4
         assert state.derived is not None
-        assert state.control_surfaces.rudder_rad == 0.1
+        assert surfaces is not None
+        assert surfaces.rudder_rad == 0.1
         assert state.propulsors[0].throttle_ratio == 0.4
 
 
 class TestModuleApi:
-    def test_protocol_version(self):
-        assert PROTOCOL_VERSION == "0.4.0"
+    """模块级常量与函数的公开面。"""
+
+    def test_protocol_version(self) -> None:
+        """协议版本与已安装包版本一致，函数形式返回同一值。"""
+        assert PROTOCOL_VERSION == version("fly_ruler_proto_python")
         assert get_protocol_version() == PROTOCOL_VERSION
 
 
 class _FakePyClient:
-    """In-memory test double for wrapper behavior tests."""
+    """用于包装层行为测试的内存替身。"""
 
-    instances = []
+    instances: list[_FakePyClient] = []
 
     def __init__(
         self,
@@ -222,21 +253,25 @@ class _FakePyClient:
         self.telemetry_schemas = telemetry_schemas
         self.spawn_timestamp = spawn_timestamp
         self.closed = False
-        self.calls: list[tuple] = []
+        self.calls: list[tuple[object, ...]] = []
         _FakePyClient.instances.append(self)
 
     def client_uuid(self) -> str:
+        """返回固定的客户端标识。"""
         return "fake-client-uuid"
 
     def aircraft_uuid(self) -> str:
+        """返回固定的飞机标识。"""
         return "fake-aircraft-uuid"
 
     def update_state(
         self, state: AircraftState, timestamp: float | None = None
     ) -> None:
+        """记录一次状态更新调用。"""
         self.calls.append(("update_state", state, timestamp))
 
     def create_event(self, event_name: str, timestamp: float | None = None) -> None:
+        """记录一次事件上报调用。"""
         self.calls.append(("create_event", event_name, timestamp))
 
     def publish_telemetry(
@@ -245,20 +280,26 @@ class _FakePyClient:
         values: tuple[float | int | bool, ...],
         timestamp: float | None = None,
     ) -> None:
+        """记录一次遥测发布调用。"""
         self.calls.append(("publish_telemetry", stream_id, values, timestamp))
 
     def despawn(
         self, reason: str | None = None, timestamp: float | None = None
     ) -> None:
+        """记录一次注销调用。"""
         self.calls.append(("despawn", reason, timestamp))
 
     def close(self) -> None:
+        """记录关闭调用并标记为已关闭。"""
         self.closed = True
         self.calls.append(("close",))
 
 
 class TestFlyRulerClient:
-    def test_wrapper_forwards_calls(self, monkeypatch):
+    """高层客户端对底层扩展对象的转发与校验。"""
+
+    def test_wrapper_forwards_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """包装层把参数原样转给底层对象，并暴露两个标识属性。"""
         _FakePyClient.instances.clear()
         monkeypatch.setattr(client_module, "PyClient", _FakePyClient)
 
@@ -308,7 +349,8 @@ class TestFlyRulerClient:
         assert inner.calls[3] == ("despawn", "done", 125.0)
         assert inner.calls[4] == ("close",)
 
-    def test_context_manager_closes_once(self, monkeypatch):
+    def test_context_manager_closes_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """退出 with 块只关闭一次底层对象。"""
         _FakePyClient.instances.clear()
         monkeypatch.setattr(client_module, "PyClient", _FakePyClient)
 
@@ -319,7 +361,10 @@ class TestFlyRulerClient:
         close_calls = [c for c in inner.calls if c[0] == "close"]
         assert len(close_calls) == 1
 
-    def test_rejects_non_finite_source_timestamps(self, monkeypatch):
+    def test_rejects_non_finite_source_timestamps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """非有限时间戳在发起调用前就被拒绝。"""
         _FakePyClient.instances.clear()
         monkeypatch.setattr(client_module, "PyClient", _FakePyClient)
 

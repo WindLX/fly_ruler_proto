@@ -88,7 +88,6 @@ def main() -> int:
     edits: list[Edit] = []
     edits.append(update_cargo_toml(new_version))
     edits.append(update_protocol_version(new_version))
-    edits.append(update_python_pyproject(new_version))
     edits.append(update_web_package_json(new_version))
     if not args.no_locks:
         edits.append(update_cargo_lock(new_version))
@@ -233,26 +232,6 @@ def update_protocol_version(new_version: str) -> Edit:
     after = re.sub(
         r'(?m)^(pub const PROTOCOL_VERSION: &str = ")[^"]+(";)$',
         rf"\g<1>{new_version}\2",
-        before,
-        count=1,
-    )
-    return Edit(path, before, after)
-
-
-def update_python_pyproject(new_version: str) -> Edit:
-    """为 Python 绑定的 ``pyproject.toml`` 版本字段生成替换。
-
-    Args:
-        new_version: 新的语义化版本号。
-
-    Returns:
-        待写入的替换记录。
-    """
-    path = ROOT / "bindings/python/pyproject.toml"
-    before = path.read_text(encoding="utf-8")
-    after = re.sub(
-        r'(?m)^version = "[^"]+"$',
-        f'version = "{new_version}"',
         before,
         count=1,
     )

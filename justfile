@@ -1,153 +1,165 @@
-# FlyRuler Protocol — repository task runner
+# FlyRuler Proto — repository task runner
 
 set fallback
 
-export GODOT4_BIN := env_var_or_default("GODOT4_BIN", "/usr/bin/godot-mono")
+# Godot 4 编辑器可执行文件，godot-rust 在构建 `bindings/godot` 时需要它生成扩展 API。
+export GDRUST_GODOT_BIN := env_var_or_default("GDRUST_GODOT_BIN", "/usr/bin/godot-mono")
 
 _default:
     @just --list
 
 # Install Python and Web dependencies.
-setup: setup-python setup-web
+setup: _setup-python _setup-web
 
-# Sync Python binding dependencies with uv.
-setup-python:
+# Format every surface in place.
+fmt: _fmt-rust _fmt-python _fmt-web
+
+# Check Rust, Python, and Web surfaces, plus version consistency.
+check: _check-version _check-rust _check-python _check-web
+
+# Run every test suite.
+test: _test-rust _test-python _test-web
+
+# Build the Rust workspace and the Web console assets.
+build: _build-rust _build-web
+
+# Run the server and the Web console: dev [all|server|web] *ARGS.
+dev TARGET="all" *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{TARGET}}" in
+      server)
+        cargo run -p fly_ruler_proto_server -- {{ARGS}}
+        ;;
+      web)
+        cd web && pnpm dev
+        ;;
+      all)
+        cargo run -p fly_ruler_proto_server -- {{ARGS}} &
+        server_pid=$!
+        trap 'kill "${server_pid}" 2>/dev/null || true' EXIT INT TERM
+        cd web
+        pnpm dev
+        ;;
+      *)
+        echo "未知目标：{{TARGET}}，可选 all、server、web" >&2
+        exit 2
+        ;;
+    esac
+
+# MSFS and Windows steps: msfs <check|build|build-release|package|run|example|example-ai> *ARGS.
+msfs TASK *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{TASK}}" in
+      check) just _msfs-check {{ARGS}} ;;
+      build) just _msfs-build {{ARGS}} ;;
+      build-release) just _msfs-build-release {{ARGS}} ;;
+      package) just _msfs-package {{ARGS}} ;;
+      run) just _msfs-run {{ARGS}} ;;
+      example) just _msfs-example {{ARGS}} ;;
+      example-ai) just _msfs-example-ai {{ARGS}} ;;
+      *)
+        echo "未知任务：{{TASK}}，可选 check、build、build-release、package、run、example、example-ai" >&2
+        exit 2
+        ;;
+    esac
+
+# Run the full local release confidence suite.
+check-release: check test _msfs-check _msfs-package
+
+# Update every version source and render the result: set-version X.Y.Z *ARGS.
+set-version VERSION *ARGS:
+    scripts/update_version.py {{VERSION}} {{ARGS}}
+
+# Run format, check, and tests together.
+pre-commit: fmt check test
+
+# ---------------------------------------------------------------------------
+# Private recipes: single-surface entry points used by the aggregate commands.
+# ---------------------------------------------------------------------------
+
+_setup-python:
     cd bindings/python && uv sync --all-groups
 
-# Install Web console dependencies with pnpm.
-setup-web:
+_setup-web:
     cd web && pnpm install
 
-# Format every language/tooling surface.
-fmt: fmt-rust fmt-python fmt-web
-
-# Check formatting for every language/tooling surface.
-check-format: check-format-rust check-format-python check-format-web
-
-# Format Rust sources.
-fmt-rust:
+_fmt-rust:
     cargo fmt --all
 
-# Check Rust formatting.
-check-format-rust:
-    cargo fmt --all --check
-
-# Format Python binding sources and examples.
-fmt-python:
+_fmt-python:
     cd bindings/python && uv run ruff format src tests examples
     cd bindings/python && uv run ruff check --fix src tests examples
 
-# Check Python binding formatting.
-check-format-python:
-    cd bindings/python && uv run ruff format --check src tests examples
-
-# Format Web console sources.
-fmt-web:
+_fmt-web:
     cd web && pnpm format
 
-# Check Web console formatting.
-check-format-web:
-    cd web && pnpm format:check
+_check-version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
+    protocol_version="$(sed -n 's/.*PROTOCOL_VERSION: &str = "\([^"]*\)".*/\1/p' core/src/lib.rs)"
+    web_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' web/package.json | head -n 1)"
+    if [[ -z "${cargo_version}" || "${cargo_version}" != "${protocol_version}" || "${cargo_version}" != "${web_version}" ]]; then
+      echo "版本不一致：Cargo.toml=${cargo_version} core=${protocol_version} web=${web_version}" >&2
+      exit 1
+    fi
+    if grep -qE '^version *= *"' bindings/python/pyproject.toml; then
+      echo "bindings/python/pyproject.toml 不应写死版本，请保留 dynamic = [\"version\"]" >&2
+      exit 1
+    fi
+    echo "版本一致：${cargo_version}"
 
-# Lint/check every language/tooling surface without running tests.
-check: check-rust check-python check-web
-
-# Run Rust formatting and clippy checks.
-check-rust: check-format-rust
+_check-rust:
+    cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run Python formatting, lint, and bytecode checks.
-check-python: check-format-python
+_check-python:
+    cd bindings/python && uv run ruff format --check src tests examples
     cd bindings/python && uv run ruff check src tests examples
+    cd bindings/python && uv run mypy
     cd bindings/python && uv run python -m compileall -q src tests examples
 
-# Run Web format, lint, test, type-check, and production build checks.
-check-web:
+_check-web:
     cd web && pnpm check
 
-# Run every test suite.
-test: test-rust test-python test-web
-
-# Run Rust workspace tests.
-test-rust:
+_test-rust:
     cargo test --workspace
 
-# Build/install the Python extension locally and run Python tests.
-test-python: build-python-dev
+_test-python: _build-python-dev
     cd bindings/python && uv run pytest tests/
 
-# Run Web console unit tests.
-test-web:
+_test-web:
     cd web && pnpm test
 
-# Build Rust workspace binaries/libraries.
-build: build-rust build-web
-
-# Build Rust workspace.
-build-rust:
+_build-rust:
     cargo build --workspace
 
-# Build/install the Python extension into the local uv environment.
-build-python-dev:
+_build-python-dev:
     cd bindings/python && uv run maturin develop
 
-# Build Web console production assets into web/dist.
-build-web:
+_build-web:
     cd web && pnpm build
 
-# Cross-compile the MSFS 2024 bridge for Windows debug.
-build-msfs:
-    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc
-
-# Cross-compile the MSFS 2024 bridge for Windows release.
-build-msfs-release:
-    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --release
-
-# Run clippy for the Windows MSVC MSFS bridge target.
-check-msfs:
+_msfs-check:
     cargo xwin clippy -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --all-targets -- -D warnings
 
-# Build the complete MSFS release bundle, including the Web console.
-package-msfs: build-web build-msfs-release
+_msfs-build:
+    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc
+
+_msfs-build-release:
+    cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --release
+
+_msfs-package: _build-web _msfs-build-release
     scripts/package_msfs_bundle.sh release dist/fly-ruler-msfs
     cd dist && rm -f fly-ruler-msfs-windows-x86_64.zip && zip -r fly-ruler-msfs-windows-x86_64.zip fly-ruler-msfs
 
-# Run the standalone UDP + HTTP/WebSocket management daemon.
-run-server *ARGS:
-    cargo run -p fly_ruler_proto_server -- {{ARGS}}
-
-# Run the Vue management console with the Vite development proxy.
-dev-web:
-    cd web && pnpm dev
-
-# Run backend and Vite development server together.
-dev-console *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cargo run -p fly_ruler_proto_server -- {{ARGS}} &
-    server_pid=$!
-    trap 'kill "${server_pid}" 2>/dev/null || true' EXIT INT TERM
-    cd web
-    pnpm dev
-
-# Run the MSFS bridge inside the Steam MSFS 2024 Proton prefix.
-run-msfs *ARGS:
+_msfs-run *ARGS:
     protontricks-launch --appid 2537590 target/x86_64-pc-windows-msvc/debug/fly-ruler-msfs-bridge.exe {{ARGS}}
 
-# Run the geodetic MSFS demo sender.
-example-msfs *ARGS:
-    cd bindings/python && uv run python examples/demo_msfs_client.py {{ARGS}}
+_msfs-example *ARGS:
+    cd bindings/python && uv run python examples/07_msfs_client.py {{ARGS}}
 
-# Run the multi-aircraft MSFS AI demo sender.
-example-msfs-ai *ARGS:
-    cd bindings/python && uv run python examples/demo_msfs_ai_client.py {{ARGS}}
-
-# Run the standard pre-commit suite: format, lint/check, and tests.
-pre-commit: fmt check test
-
-# Run the local release confidence suite.
-check-release: check test check-msfs package-msfs
-
-# Update all project versions: Rust, protocol, Python, Web, lockfiles, docs.
-set-version VERSION *ARGS:
-    scripts/update_version.py {{VERSION}} {{ARGS}}
+_msfs-example-ai *ARGS:
+    cd bindings/python && uv run python examples/08_msfs_ai_fleet.py {{ARGS}}
