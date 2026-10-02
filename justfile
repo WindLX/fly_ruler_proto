@@ -70,7 +70,11 @@ check-release: check test _msfs-check _msfs-package
 
 # Update every version source and render the result: set-version X.Y.Z *ARGS.
 set-version VERSION *ARGS:
-    scripts/update_version.py {{VERSION}} {{ARGS}}
+    scripts/version.py set {{VERSION}} {{ARGS}}
+
+# 只读列出全部版本源、锁文件携带情况与工具版本。
+version:
+    scripts/version.py show
 
 # Run format, check, and tests together.
 pre-commit: fmt check test
@@ -96,20 +100,7 @@ _fmt-web:
     cd web && pnpm format
 
 _check-version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cargo_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
-    protocol_version="$(sed -n 's/.*PROTOCOL_VERSION: &str = "\([^"]*\)".*/\1/p' core/src/lib.rs)"
-    web_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' web/package.json | head -n 1)"
-    if [[ -z "${cargo_version}" || "${cargo_version}" != "${protocol_version}" || "${cargo_version}" != "${web_version}" ]]; then
-      echo "版本不一致：Cargo.toml=${cargo_version} core=${protocol_version} web=${web_version}" >&2
-      exit 1
-    fi
-    if grep -qE '^version *= *"' bindings/python/pyproject.toml; then
-      echo "bindings/python/pyproject.toml 不应写死版本，请保留 dynamic = [\"version\"]" >&2
-      exit 1
-    fi
-    echo "版本一致：${cargo_version}"
+    python3 scripts/version.py check
 
 _check-rust:
     cargo fmt --all --check
@@ -126,6 +117,7 @@ _check-web:
 
 _check-scripts:
     bash -n scripts/install-msfs.sh scripts/package_msfs_bundle.sh
+    python3 -m py_compile scripts/version.py
 
 _test-rust:
     cargo test --workspace

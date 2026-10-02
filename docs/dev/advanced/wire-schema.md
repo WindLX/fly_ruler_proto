@@ -64,7 +64,7 @@ proto3 下字段编号是线格式身份，删除的编号不能复用，新增�
 
 `PROTOCOL_VERSION` 定义在 `core/src/lib.rs:34`，当前为 0.4.0，由 `core/src/transport/client.rs:51` 随握手送出。服务端用严格相等判定：`core/src/transport/server.rs:446` 比较 `hs.version == PROTOCOL_VERSION`，不等时回 `ErrorCode::ProtocolVersionMismatch` 与消息 `protocol version mismatch`（`core/src/transport/server.rs:461-464`）。客户端收到错误响应后转成 `TransportError::HandshakeRejected`（`core/src/transport/client.rs:266`）。
 
-版本变更流程：只在字段语义、单位或必填性改变时提升版本，纯追加可选字段不提升。改版本走 `just set-version X.Y.Z`，脚本 `scripts/update_version.py` 同时改写 `Cargo.toml`、`core/src/lib.rs` 与 `web/package.json`；`just check` 内含的三处一致性校验不一致即失败。
+版本变更流程：只在字段语义、单位或必填性改变时提升版本，纯追加可选字段不提升。改版本走 `just set-version X.Y.Z`，脚本 `scripts/version.py` 同时改写 `Cargo.toml`、`core/src/lib.rs` 与 `web/package.json`；`just check` 内含的三处一致性校验不一致即失败。
 
 ## 两段式遥测
 

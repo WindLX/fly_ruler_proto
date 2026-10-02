@@ -10,7 +10,7 @@
 just set-version 0.5.0
 ```
 
-`scripts/update_version.py` 会同步 `Cargo.toml` 的 workspace 版本、`core/src/lib.rs` 的 `PROTOCOL_VERSION`、`web/package.json`、`Cargo.lock`、`bindings/python/uv.lock` 与文档中的版本引用。Python 包的版本是动态的，由 maturin 从 `Cargo.toml` 读取，`bindings/python/pyproject.toml` 里不写死版本号。
+`scripts/version.py set` 会同步 `Cargo.toml` 的 workspace 版本、`core/src/lib.rs` 的 `PROTOCOL_VERSION`、`web/package.json`、`Cargo.lock`、`bindings/python/uv.lock` 与文档中的版本引用。Python 包的版本是动态的，由 maturin 从 `Cargo.toml` 读取，`bindings/python/pyproject.toml` 里不写死版本号。只读查看全部版本源、锁文件与工具版本用 `just version`。
 
 改完先跑 `just _check-version` 确认三处版本一致，再提交。
 

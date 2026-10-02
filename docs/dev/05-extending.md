@@ -29,7 +29,7 @@ MSFS 桥要同时改读取映射与写回展开：`frame_from_state()`（`bindin
 
 ## 四、版本与兼容
 
-协议语义变更（字段含义、单位、必填性变化）必须同步版本号：`PROTOCOL_VERSION`（`core/src/lib.rs:34`）、workspace 版本（`Cargo.toml:6`）与 `web/package.json:4` 三处由 `just set-version X.Y.Z` 一次改齐，脚本实现见 `scripts/update_version.py`。`just _check-version` 会在三处不一致时直接失败，`just check` 已经包含它。
+协议语义变更（字段含义、单位、必填性变化）必须同步版本号：`PROTOCOL_VERSION`（`core/src/lib.rs:34`）、workspace 版本（`Cargo.toml:6`）与 `web/package.json:4` 三处由 `just set-version X.Y.Z` 一次改齐，脚本实现见 `scripts/version.py`，只读查看全部版本源用 `just version`。`just _check-version` 会在三处不一致时直接失败，`just check` 已经包含它。
 
 只新增可选字段、不改既有字段语义时不需要动版本号；这是 proto3 下唯一安全的加字段方式。
 
