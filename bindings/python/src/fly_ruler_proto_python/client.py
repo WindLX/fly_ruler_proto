@@ -46,7 +46,7 @@ def create_aircraft_state(
 
     Args:
         position: NED 位置 ``(x, y, z)``，单位 ``[m]``。
-        velocity: NED 速度 ``(vx, vy, vz)``，单位 ``[m/s]``。
+        velocity: 机体系 BODY-FRD 速度 ``(vx, vy, vz)``，单位 ``[m/s]``（x 前、y 右、z 下）。
         attitude: 姿态；``None`` 时使用 ``Attitude.identity()``。
         angular_velocity: 机体系角速度 ``(p, q, r)``，单位 ``[rad/s]``。
         derived: 可选的派生状态。

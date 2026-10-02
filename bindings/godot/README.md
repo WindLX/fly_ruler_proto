@@ -13,4 +13,4 @@
 ## 安装与运行
 
 - 构建：`cargo build -p fly_ruler_proto_godot`，发布版加 `--release`。
-- 安装到工程：`bindings/godot/scripts/install_addon.sh <godot_project> [debug|release]`，依赖 `GODOT4_BIN`（默认 `/usr/bin/godot-mono`）。
+- 安装到工程：`bindings/godot/scripts/install_addon.sh <godot_project> [debug|release]`，依赖 `GDRUST_GODOT_BIN`（默认 `/usr/bin/godot-mono`，由根 `justfile` 导出）。

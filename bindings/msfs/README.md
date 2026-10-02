@@ -14,8 +14,8 @@
 
 ## 构建与运行
 
-- 交叉构建：`just build-msfs` 与 `just build-msfs-release`（`cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc`）。
-- 静态检查：`just check-msfs`。
-- 打包：`just package-msfs`，产物是 `dist/fly-ruler-msfs-windows-x86_64.zip`。
+- 交叉构建：`just msfs build` 与 `just msfs build-release`（`cargo xwin build -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc`）。
+- 静态检查：`just msfs check`。
+- 打包：`just msfs package`，产物是 `dist/fly-ruler-msfs-windows-x86_64.zip`。
 
 这些命令需要 Windows 目标工具链，不属于本机默认的 `just check` / `just test` 范围。`sessions/` 是运行时会话目录，已被 `.gitignore` 忽略，不随源码分发。

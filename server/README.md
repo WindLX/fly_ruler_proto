@@ -11,7 +11,7 @@
 ## 运行
 
 ```bash
-just run-server --config server/fly-ruler-server.toml
+just dev server --config server/fly-ruler-server.toml
 ```
 
-`just run-server` 等价于 `cargo run -p fly_ruler_proto_server -- <参数>`；不带参数时使用默认配置，实际监听地址与日志级别由配置文件决定。
+`just dev server` 等价于 `cargo run -p fly_ruler_proto_server -- <参数>`；不带参数时使用默认配置，实际监听地址与日志级别由配置文件决定。

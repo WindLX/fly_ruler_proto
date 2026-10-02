@@ -13,6 +13,6 @@
 
 ## 开发与构建
 
-- 安装依赖：`cd web && pnpm install`（等价于包内 `just setup-web`）。
+- 安装依赖：`cd web && pnpm install`（仓库入口 `just setup`）。
 - 开发：`pnpm dev`；生产构建：`pnpm build`（`vue-tsc -b && vite build`）。
 - 测试与门禁：`pnpm test`（vitest）、`pnpm check`（格式检查、lint、测试、构建）。

@@ -6,7 +6,7 @@
 
 - `src/lib.rs`、`src/client.rs`、`src/protocol.rs` —— PyO3 扩展 `fly_ruler_proto_python._core`（`crate-type = cdylib`）。
 - `src/fly_ruler_proto_python/` —— 纯 Python 包：`__init__.py`（导出面与 `main()`）、`client.py`（`FlyRulerClient`、`create_aircraft_state`）、`_core.pyi`（类型存根）。
-- `examples/` —— UDP 客户端与 MSFS 演示脚本。
+- `examples/` —— 从连接到多机编队的渐进示例，见 `examples/README.md`。
 - `tests/` —— pytest 回归。
 
 ## 安装与运行
@@ -18,4 +18,4 @@
 ## 测试
 
 - `uv run pytest tests/`（需先构建扩展）。
-- 仓库入口：`just check-python`、`just test-python`。
+- 仓库入口：`just check`、`just test`（后者会先跑 `maturin develop`）。

@@ -13,4 +13,4 @@
 ## 安装与测试
 
 - 构建：`cargo build -p fly_ruler_proto_core`。
-- 测试：`cargo test -p fly_ruler_proto_core`，或仓库入口 `just check-rust` / `just test-rust`。
+- 测试：`cargo test -p fly_ruler_proto_core`，或仓库入口 `just check` / `just test`。

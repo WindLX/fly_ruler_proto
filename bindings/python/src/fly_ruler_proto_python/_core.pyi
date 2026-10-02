@@ -389,7 +389,7 @@ class AircraftState:
 
     Attributes:
         position: NED 位置向量 ``[m]``。
-        velocity: NED 速度向量 ``[m/s]``。
+        velocity: 机体系 BODY-FRD 速度向量 ``[m/s]``（x 前、y 右、z 下）。
         attitude: 姿态。
         angular_velocity: 机体系角速度 ``[rad/s]``。
         derived: 可选派生状态。
@@ -422,7 +422,7 @@ class AircraftState:
 
         Args:
             position: NED 位置向量 ``[m]``。
-            velocity: NED 速度向量 ``[m/s]``。
+            velocity: 机体系 BODY-FRD 速度向量 ``[m/s]``（x 前、y 右、z 下）。
             attitude: 姿态。
             angular_velocity: 机体系角速度 ``[rad/s]``。
             derived: 派生状态。
