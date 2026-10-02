@@ -11,7 +11,7 @@
 # the launcher, and stop it with Ctrl-C when you are done.
 #
 # Usage:
-#   curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash
 #   ./install-msfs.sh --version v0.4.0 --with-service
 #   ./install-msfs.sh --uninstall [--purge]
 #

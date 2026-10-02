@@ -25,7 +25,7 @@
 Linux 上不必手工解压：发布脚本把桥装进用户空间，并配好目录、配置与启动命令。
 
 ```bash
-curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash
+curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash
 ```
 
 装完程序在 `~/.local/share/fly-ruler-msfs/versions/<版本>/`（`current` 软链指向它），配置在 `~/.config/fly-ruler-msfs/fly-ruler-msfs.toml`（路径都是绝对路径），命令是 `~/.local/bin/fly-ruler-msfs`，工作目录是 `~/.local/state/fly-ruler-msfs`，会话数据在 `~/.local/share/fly-ruler-msfs/sessions/`。加 `--with-service` 会额外写一个 systemd user unit，只写文件、不 enable 也不启动；卸载用 `--uninstall`，连配置与会话数据一起删就再加 `--purge`。

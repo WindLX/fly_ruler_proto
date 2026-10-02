@@ -105,7 +105,7 @@ UDP 通路没有重传与确认，除了握手那 1 秒的等待之外，状态�
 
 ## 相关页面
 
-- [架构总览](../01-architecture.md)：core 分层与数据流
-- [Python 绑定](../02-python-binding.md)：关闭语义如何映射到 Python 异常
+- 架构总览（`docs/dev/01-architecture.md`）：core 分层与数据流
+- Python 绑定（`docs/dev/02-python-binding.md`）：关闭语义如何映射到 Python 异常
 - [内核分层与并发](kernel-concurrency.md)：会话表、过期清理与接收队列的位置
-- [接口参考](../api.md)：传输层与绑定的公开名字
+- 接口参考（`docs/dev/api.md`）：传输层与绑定的公开名字

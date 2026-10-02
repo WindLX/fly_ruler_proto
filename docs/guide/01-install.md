@@ -43,10 +43,10 @@ python -m pip install fly-ruler-proto-python
 Linux 上的 MSFS 桥用安装脚本装到用户空间，和常见命令行工具一样：
 
 ```bash
-curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash
+curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash
 ```
 
-脚本从 Release 里取 `fly-ruler-msfs-windows-x86_64.zip`，校验压缩包内的 `SHA256SUMS` 之后装出这样一套目录：
+脚本从 GitHub Release 里取 `fly-ruler-msfs-windows-x86_64.zip`，校验压缩包内的 `SHA256SUMS` 之后装出这样一套目录：
 
 | 位置 | 内容 |
 | --- | --- |
@@ -70,7 +70,9 @@ curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/in
 
 装完运行 `fly-ruler-msfs`，它会把桥送进 MSFS 的 Proton 前缀；`~/.local/bin` 不在 `PATH` 里时脚本会提示怎么加。桥不是常驻服务：先启动 MSFS 2024 并进入 Free Flight，再运行这条命令，收工按 Ctrl-C。想临时放进后台就用 `systemctl --user start fly-ruler-msfs`，它写的 unit 是按需启动的，没有 `[Install]` 段，`systemctl --user enable` 会直接失败。
 
-卸载还是这个脚本：`curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
+这段地址取的是主干上的脚本，因此不必等某个版本把脚本发成资产；要连脚本一起钉到某个版本，就换成标签地址，例如 `https://raw.githubusercontent.com/WindLX/fly_ruler_proto/vX.Y.Z/scripts/install-msfs.sh`，或者用同一个 Release 的资产地址 `https://github.com/WindLX/fly_ruler_proto/releases/download/vX.Y.Z/install-msfs.sh`（把 `vX.Y.Z` 换成标签即可）。`--version vX.Y.Z` 钉的是要装的桥版本，和脚本地址是两件事。
+
+卸载还是这个脚本：`curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
 
 Windows 上不用安装脚本：到 GitHub Release 页面取 `fly-ruler-msfs-windows-x86_64.zip`，解压后直接运行 `fly-ruler-msfs-bridge.exe`，SimConnect 由本机的 MSFS 2024 提供。不接模拟器时另取 `fly-ruler-server-linux-x86_64.tar.gz`，解压后在 `fly-ruler-server/` 目录里执行 `./fly-ruler-server`；两个压缩包都自带 `web/dist/` 控制台资源和示例 TOML 配置。
 

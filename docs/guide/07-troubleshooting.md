@@ -66,7 +66,7 @@ protontricks 提示缺少 `winetricks` 只是警告，桥本身的运行不依�
 
 升级就是再跑一次安装脚本：新版本装进 `~/.local/share/fly-ruler-msfs/versions/`，`current` 软链原子指向它，旧版本仍在原地；想回退就把 `current` 指回旧目录。
 
-卸载用 `curl -fsSL https://github.com/WindLX/fly_ruler_proto/releases/latest/download/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
+卸载用 `curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash -s -- --uninstall`，默认保留配置、日志与会话数据，加 `--purge` 连这些一起删。
 
 ## 控制台打不开或空白
 

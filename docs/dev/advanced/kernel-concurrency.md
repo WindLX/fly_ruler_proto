@@ -94,8 +94,8 @@ Python 绑定自己持有一个 tokio 运行时并把网络操作 `block_on` 到
 
 ## 相关页面
 
-- [架构总览](../01-architecture.md)：分层、构件与数据路径
+- 架构总览（`docs/dev/01-architecture.md`）：分层、构件与数据路径
 - [UDP 会话与可靠性](udp-session.md)：握手、心跳、ACK 与游标分片的重传规则
 - [存储与回放](storage-playback.md)：store 与回放控制器的公开接口
 - [管理服务与 HTTP/WS 路由](management-api.md)：这些共享状态如何暴露成 REST 与推送
-- [Python 绑定](../02-python-binding.md)：内核在本机进程内被嵌入时的生命周期
+- Python 绑定（`docs/dev/02-python-binding.md`）：内核在本机进程内被嵌入时的生命周期

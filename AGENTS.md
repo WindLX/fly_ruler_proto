@@ -19,7 +19,7 @@ FlyRuler protobuf/UDP 协议与数据内核：Rust 内核与服务器、Python/G
 ## 文档
 
 - **约定**：正本在 `docs/guide/`、`docs/dev/`；根站 `docs/{guide,dev}/components/proto/` 下的同名页面只是 `<!--@include-->` 壳页，改内容改本目录，新增章节时同时建壳页并在 `docs/.vitepress/config.mts` 登记侧边栏。
-- **约定**：面向使用者写八章（安装与准备、五分钟跑通、控制台、控制飞行、遥测与图表、会话与回放、排障、独立服务端），面向开发者写架构总览、Python 绑定、控制台前端、MSFS 绑定、扩展点与 `advanced/` 高级专题（wire schema、UDP 会话、存储与回放、管理接口、内核并发）；中文散文，段落单行不手工折行，同手册内用相对链接，跨手册引用写成行内代码，行为结论带源码位置（`core/src/...:行号`）。
+- **约定**：面向使用者写八章（安装与准备、五分钟跑通、控制台、控制飞行、遥测与图表、会话与回放、排障、独立服务端），面向开发者写架构总览、Python 绑定、控制台前端、MSFS 绑定、扩展点与 `advanced/` 高级专题（wire schema、UDP 会话、存储与回放、管理接口、内核并发）；中文散文，段落单行不手工折行，同手册内用相对链接且只写同级或往下的目标（例如 `advanced/udp-session.md`），往上一级的引用与跨手册引用都写成行内代码（主站把本目录页面当壳页包含，相对上跳链接会被 include 插件重写成失效地址），行为结论带源码位置（`core/src/...:行号`）。
 - **禁止**：正文写主站文档站的结构与转发关系，也不写写作规则、完成状态、进度、内部任务记录（itemark 编号）、测试与验证进度或「尚未验证」这类免责说明；本仓自己的命令与验证入口是读者需要的内容，可以写。
 - **约定**：接口参考页由生成器从源码 docstring 生成，改注释后在主仓重生成（`cd docs && just api`）；漏生成时 `cd docs && just test` 会报错。
 
@@ -29,7 +29,7 @@ FlyRuler protobuf/UDP 协议与数据内核：Rust 内核与服务器、Python/G
 - **必须**：UDP session、ACK、heartbeat、best-effort 语义变化有协议回归测试；新增可选字段不得复用已有字段编号。
 - **必须**：PyO3 client/server 显式 close 并保持 context-manager 清理语义，关闭后调用抛 `ConnectionError`。
 - **必须**：Rust、Python、Godot、MSFS 的字段绑定与文档同步更新；Python 公开面变化同时更新 `_core.pyi`、`bindings/python/examples/` 与 `README.md`。
-- **必须**：每个 Release 都把 `scripts/install-msfs.sh` 作为资产带上（`release.yml` 的 `github-release` job 会加进去），因为文档与脚本自身给用户的地址是 `/releases/latest/download/install-msfs.sh`。
+- **必须**：每个 Release 都把 `scripts/install-msfs.sh` 作为资产带上（`release.yml` 的 `github-release` job 会加进去），供按版本钉住安装脚本的人使用；用户文档与脚本自身给用户的主推地址是主干上的 `https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh`。
 - **禁止**：core 实现 UI replay、渲染插值或模型绑定；这些职责属于 consumer。
 - **禁止**：在内部 workspace crate 新增重复 AGENTS；本文件已覆盖本仓。
 - **禁止**：手改 maturin 生成物、锁定依赖或 `web/dist` 产物。

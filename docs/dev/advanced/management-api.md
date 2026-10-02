@@ -127,8 +127,8 @@ CORS 层只放行配置中的来源，方法限 GET、POST、PUT，请求头限 
 
 ## 相关页面
 
-- [架构总览](../01-architecture.md)：内核、传输与管理面的分工
+- 架构总览（`docs/dev/01-architecture.md`）：内核、传输与管理面的分工
 - [内核分层与并发](kernel-concurrency.md)：共享状态怎么交给管理面、停机顺序与持久化操作队列
 - [存储与回放](storage-playback.md)：路由背后的数据模型与回放状态机
-- [接口参考](../api.md)：管理模块的公开类型
+- 接口参考（`docs/dev/api.md`）：管理模块的公开类型
 - `docs/guide/03-console.md`：配置项与控制台用法

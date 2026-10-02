@@ -99,9 +99,9 @@ proto3 下字段编号是线格式身份，删除的编号不能复用，新增�
 
 ## 相关页面
 
-- [架构总览](../01-architecture.md)：core 分层与数据流
+- 架构总览（`docs/dev/01-architecture.md`）：core 分层与数据流
 - [UDP 会话与可靠性](udp-session.md)：握手如何携带版本、ACK 与重传
 - [管理服务与 HTTP/WS 路由](management-api.md)：字段落库后如何被查询与推送
-- [接口参考](../api.md)：绑定公开面与 core 模块
+- 接口参考（`docs/dev/api.md`）：绑定公开面与 core 模块
 - `docs/guide/05-telemetry.md`：产出方如何声明流并发送样本
 - `docs/guide/01-install.md`：安装与快速开始

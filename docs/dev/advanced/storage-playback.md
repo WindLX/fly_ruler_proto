@@ -102,9 +102,9 @@ store 不对遥测帧做自动裁剪（`core/src/store.rs:101`），配置里的
 
 ## 相关页面
 
-- [架构总览](../01-architecture.md)：store 与回放在 core 中的位置
+- 架构总览（`docs/dev/01-architecture.md`）：store 与回放在 core 中的位置
 - [内核分层与并发](kernel-concurrency.md)：整表写锁、摄取闸门与一致性快照
 - [管理服务与 HTTP/WS 路由](management-api.md)：这些查询与持久化操作的 HTTP 入口
-- [接口参考](../api.md)：`TimeSeriesStore` 与 `PlaybackController` 的公开方法
+- 接口参考（`docs/dev/api.md`）：`TimeSeriesStore` 与 `PlaybackController` 的公开方法
 - `docs/guide/06-sessions.md`：控制台里的回放操作与时间轴
 - `docs/guide/06-sessions.md`：会话保存与数据根目录的用法
