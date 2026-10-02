@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust 内核与传输层
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Rust 工具链
+        run: rustup component add rustfmt clippy
+      - name: 缓存 cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: 格式检查
+        run: cargo fmt --all --check
+      # godot-rust 的 `api-custom` 构建期需要 Godot 4 编辑器（`GDRUST_GODOT_BIN`），
+      # 因此 CI 跳过该成员；Godot 绑定在装有 Godot 的开发机上由 `just check` 覆盖。
+      - name: Clippy
+        run: |
+          cargo clippy --workspace --exclude fly_ruler_proto_godot --all-targets --all-features -- -D warnings
+      - name: 单元测试
+        run: cargo test --workspace --exclude fly_ruler_proto_godot
+
+  python:
+    name: Python 绑定
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: 安装依赖
+        working-directory: bindings/python
+        run: uv sync --all-groups
+      - name: 构建扩展模块
+        working-directory: bindings/python
+        run: uv run maturin develop
+      - name: 测试
+        working-directory: bindings/python
+        run: uv run pytest tests/
+      - name: Ruff 检查
+        working-directory: bindings/python
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: 类型检查
+        working-directory: bindings/python
+        run: uv run mypy
+
+  web:
+    name: 控制台前端
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 安装依赖
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: 格式、类型、测试与构建
+        working-directory: web
+        run: pnpm check
