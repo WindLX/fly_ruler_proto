@@ -8,9 +8,18 @@
     uv run python examples/04_sessions_and_playback.py --duration 30
     uv run python examples/04_sessions_and_playback.py --radius 600 --speed 80 --event-every 5
 
+前置条件：本机已装好客户端库，并有一个服务端在 ``--address``（默认
+``127.0.0.1:18002``）上运行，``just dev server`` 是独立服务端的启动命令。回放与
+时间轴在控制台里操作，因此观察结果时还需要浏览器能打开 ``http://127.0.0.1:18003``。
+
 一架飞机在水平面内做匀速圆周运动，姿态只含偏航、角速度恒定，周期性发送自定义
 事件标记飞行阶段。运行期间在控制台打开这架飞机，除了时间序列曲线，还可以用回放
 控制与时间轴查看整段会话以及事件标记；``--duration 0`` 表示一直运行到中断。
+
+跑通后终端打印 ``aircraft_uuid`` 与总帧数。控制台左栏的 ``--aircraft`` 飞机下，
+位置曲线是平面圆、航向曲线在 -π 到 π 之间来回折返；每 ``--event-every`` 秒出现
+一个 ``demo.tick`` 事件标记，收尾时补一个 ``demo.finished``。在一段数据上点保存后
+再加载，可以重复播放同一段会话。
 
 服务端不可达时打印中文原因并以退出码 1 结束；``Ctrl-C`` 会走完 ``finally``
 关闭客户端后退出。
@@ -38,6 +47,7 @@ class MotionConfig:
 
 def build_state(elapsed_s: float, config: MotionConfig):
     """按经过时间构造圆周飞行状态。"""
+    # 匀速率圆周：角速度由地速除以半径得出，相位与航向角都以同一相位角为准。
     omega = config.speed_mps / max(config.radius_m, 1e-6)
     theta = omega * elapsed_s
 
@@ -46,6 +56,7 @@ def build_state(elapsed_s: float, config: MotionConfig):
     velocity_north = -config.radius_m * omega * math.sin(theta)
     velocity_east = config.radius_m * omega * math.cos(theta)
 
+    # 航向角取切向速度方向，姿态四元数只含这个偏航分量。
     yaw = math.atan2(velocity_east, velocity_north)
     half = yaw * 0.5
     return create_aircraft_state(
@@ -106,6 +117,8 @@ def main() -> int:
 
     print(f"连接 {args.address}，飞机 {args.aircraft}")
     try:
+        # 构造客户端即完成握手与 spawn；toml_config 随 spawn 发出。
+        # heartbeat_interval_secs 控制保活周期，服务端据此判断客户端是否还在。
         client = FlyRulerClient(
             args.address,
             args.aircraft,
@@ -132,9 +145,11 @@ def main() -> int:
                 if args.duration > 0 and elapsed >= args.duration:
                     break
 
+                # 每帧的时间戳都取当前时刻，控制台按它排序。
                 client.update_state(build_state(elapsed, config), timestamp=time.time())
                 sent += 1
 
+                # 自定义事件同样带时间戳，用来在时间轴上标出飞行阶段。
                 if args.event_every > 0 and elapsed >= next_event:
                     client.create_event("demo.tick", timestamp=time.time())
                     next_event += args.event_every

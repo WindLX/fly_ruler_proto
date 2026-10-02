@@ -8,11 +8,22 @@
     uv run python examples/03_events_and_telemetry.py
     uv run python examples/03_events_and_telemetry.py --hz 5 --duration 10 --gear-cycle 3
 
+前置条件：本机已装好客户端库，并有一个服务端在 ``--address``（默认
+``127.0.0.1:18002``）上运行，``just dev server`` 是独立服务端的启动命令，桥本身
+也带同一个接收端。本示例只推状态、遥测与事件，不涉及操纵面与发动机实体，没有
+模拟器也能完整跑通。
+
 遥测流采用两段式：创建客户端时用 ``TelemetryStreamSchema`` 注册字段结构，之后用
 ``publish_telemetry`` 按字段声明顺序发布取值序列，服务端用注册的类型解出数值。
 事件走 ``create_event``，与状态、遥测各自独立记录：脚本先发一个自定义事件，再周期
 性交替发送起落架收起与放下事件，用来观察回放时间轴上的事件标记。
 ``--duration 0`` 表示一直运行到中断。
+
+跑通后终端依次打印 ``已发送事件 demo.started``、按周期打印起落架事件，结束时打印
+流 ``engine`` 的总帧数。控制台左栏出现 ``--aircraft`` 指定的飞机，字段目录里多出
+``engine`` 流下的五个字段（``n1``、``egt``、``fuel_kg``、``mode``、``gear_down``），
+分别来自 ``engine``、``fuel``、``gear`` 三个分组；时间轴上能看到 ``demo.started``
+以及交替出现的起落架事件标记。
 
 服务端不可达时打印中文原因并以退出码 1 结束；``Ctrl-C`` 会走完 ``finally``
 关闭客户端后退出。
@@ -40,6 +51,7 @@ GEAR_UP_EVENT = "flyruler.control.gear_up"
 
 def build_schema(nominal_rate_hz: float | None) -> TelemetryStreamSchema:
     """声明一条发动机遥测流的字段结构。"""
+    # 字段顺序就是 publish_telemetry 的取值顺序；label、group、unit 只影响控制台显示。
     return TelemetryStreamSchema(
         STREAM_ID,
         (
@@ -78,6 +90,7 @@ def build_schema(nominal_rate_hz: float | None) -> TelemetryStreamSchema:
             ),
         ),
         name="发动机遥测",
+        # nominal_rate_hz 只是声明期望频率，服务端不按它限流或补点。
         nominal_rate_hz=nominal_rate_hz,
     )
 
@@ -115,6 +128,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
+    # nominal_rate 为 0 表示不声明期望频率，向 schema 传 None。
     nominal_rate_hz = args.nominal_rate if args.nominal_rate > 0 else None
     schema = build_schema(nominal_rate_hz)
     try:
@@ -133,6 +147,7 @@ def main() -> int:
         print(f"遥测流声明不合法：{error}")
         return 1
 
+    # 一个节拍里依次发出状态帧、遥测帧，再按需补一条事件。
     period = 1.0 / args.hz
     start = time.monotonic()
     next_tick = start
@@ -161,9 +176,11 @@ def main() -> int:
                 2,  # mode
                 elapsed > 1.0,  # gear_down
             )
+            # 类型必须匹配字段声明：F64 收数值、I64 收整数（拒绝布尔）、Bool 只收布尔。
             client.publish_telemetry(STREAM_ID, values, timestamp=time.time())
             published += 1
 
+            # 起落架事件按周期交替，同名事件可以在时间轴上叠成开关序列。
             if args.gear_cycle > 0 and elapsed >= next_gear:
                 gear_down = not gear_down
                 event_name = GEAR_DOWN_EVENT if gear_down else GEAR_UP_EVENT
