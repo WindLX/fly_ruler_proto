@@ -32,10 +32,11 @@ Python 侧要求 3.12 或更高（`bindings/python/pyproject.toml:9`）。
 
 ## 路线一：安装已发布的产物
 
-Python 客户端库用 pip 装：
+Python 客户端库从 PyPI 装：
 
 ```bash
-python -m pip install fly-ruler-proto-python
+uv add fly-ruler-proto-python                 # 写进项目依赖
+python -m pip install fly-ruler-proto-python  # 不用 uv 时
 ```
 
 发行包名在 pip 里会做归一化处理，写连字符或下划线都能装；导入时始终写 `import fly_ruler_proto_python`。
