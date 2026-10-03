@@ -63,11 +63,15 @@ curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts
 | 选项 | 作用 |
 | --- | --- |
 | `--version v0.4.0` | 装指定版本，默认取最新 Release |
+| `--source DIR` | 从本地源码目录安装，不下载压缩包：`DIR` 是含 `scripts/package_msfs_bundle.sh` 的 fly_ruler_proto 仓库 |
+| `--no-build` | 配合 `--source`：只用已经打包好的 `<DIR>/dist/fly-ruler-msfs`，缺失即报错 |
 | `--with-service` | 额外写 `~/.config/systemd/user/fly-ruler-msfs.service`，只写文件，不 enable、不启动 |
 | `--appid 2537590` | 换一个 MSFS 的 Steam AppID |
-| `--dry-run` | 只解析版本、打印将要执行的动作，不动磁盘 |
+| `--dry-run` | 只解析版本、打印将要执行的动作，不动磁盘、不构建 |
 | `--skip-checks` | 跳过 protontricks、MSFS 目录、端口占用等环境检查 |
 | `--strict` | 把上面那些警告当成错误 |
+
+从本地源码树安装用 `--source`，它和 `--version` 互斥（`scripts/install-msfs.sh:171-176`）：脚本认为自己拿到的是 fly_ruler_proto 仓库，读仓库根 `Cargo.toml` 的版本，把安装版本标签写成 `local-0.4.0` 这种带 `local-` 前缀的形式（`scripts/install-msfs.sh:420-428`、`scripts/install-msfs.sh:458-467`）。`<DIR>/dist/fly-ruler-msfs` 完整时直接使用，否则执行 `just msfs package` 现场打包；加 `--no-build` 就只提示先打包再退出（`scripts/install-msfs.sh:440-456`）。源码模式只要求 `sha256sum`，不访问网络；`--uninstall` 与来源无关，带了 `--source` 只打印一行提示后忽略。
 
 装完运行 `fly-ruler-msfs`，它会把桥送进 MSFS 的 Proton 前缀；`~/.local/bin` 不在 `PATH` 里时脚本会提示怎么加。桥不是常驻服务：先启动 MSFS 2024 并进入 Free Flight，再运行这条命令，收工按 Ctrl-C。想临时放进后台就用 `systemctl --user start fly-ruler-msfs`，它写的 unit 是按需启动的，没有 `[Install]` 段，`systemctl --user enable` 会直接失败。
 

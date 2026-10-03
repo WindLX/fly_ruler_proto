@@ -138,6 +138,7 @@ _build-web:
     cd web && pnpm build
 
 _msfs-check:
+    python3 -m unittest discover -s scripts/tests -q
     cargo xwin clippy -p fly_ruler_proto_msfs --target x86_64-pc-windows-msvc --all-targets -- -D warnings
 
 _msfs-build:

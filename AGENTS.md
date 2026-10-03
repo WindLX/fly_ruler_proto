@@ -12,7 +12,7 @@ FlyRuler protobuf/UDP 协议与数据内核：Rust 内核与服务器、Python/G
 - `bindings/` —— `python`、`godot`、`msfs` 三套绑定
 - `web/` —— Vue 3 控制台前端
 - `bindings/python/examples/` —— 由简到繁的协议示例，阅读顺序见 `bindings/python/examples/README.md`
-- `scripts/install-msfs.sh` —— 面向用户的 MSFS 桥安装/卸载脚本，只装用户空间、不用 sudo；用户配置由它生成在 `~/.config/fly-ruler-msfs/`，启动命令是 `~/.local/bin/fly-ruler-msfs`，`--with-service` 写的 systemd user unit 只写文件、不 enable 也不 start
+- `scripts/install-msfs.sh` —— 面向用户的 MSFS 桥安装/卸载脚本，只装用户空间、不用 sudo；用户配置由它生成在 `~/.config/fly-ruler-msfs/`，启动命令是 `~/.local/bin/fly-ruler-msfs`，`--with-service` 写的 systemd user unit 只写文件、不 enable 也不 start；`--source DIR` 改为从本地源码树安装（不联网，产物缺失时执行 `just msfs package`，`--no-build` 则要求产物已存在），回归测试在 `scripts/tests/test_install_msfs.py`，随 `just msfs check` 运行
 - `bindings/msfs/fly-ruler-msfs.dev.toml` —— 源码树内的开发配置（路径相对仓库根），`just msfs run` 用它，可用 `FR_MSFS_CONFIG` 换成别的文件
 - `docs/` —— 用户手册（`docs/guide/`）与开发者手册（`docs/dev/`）
 

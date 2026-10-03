@@ -50,9 +50,12 @@ MSFS 桥装在用户空间，一条命令搞定，不需要 sudo：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash
+
+# 从本地源码树安装：优先用 dist/fly-ruler-msfs，缺失时执行 just msfs package
+bash scripts/install-msfs.sh --source /path/to/fly_ruler_proto
 ```
 
-脚本把最新 Release 里的桥装到 `~/.local/share/fly-ruler-msfs/`，生成配置 `~/.config/fly-ruler-msfs/fly-ruler-msfs.toml` 与启动命令 `~/.local/bin/fly-ruler-msfs`；`--version vX.Y.Z` 装指定版本，`--dry-run` 先看它要做什么，卸载加 `--uninstall`（`--purge` 连配置、日志与会话数据一起删），`--with-service` 额外写一份 systemd user unit（只写文件，不 enable、不 start）。桥不是常驻服务：先启动 MSFS 2024 并进入 Free Flight，再运行 `fly-ruler-msfs`，收工按 Ctrl-C。目录布局、全部选项与 Windows 手工路线见 `docs/guide/01-install.md`。
+脚本把最新 Release 里的桥装到 `~/.local/share/fly-ruler-msfs/`，生成配置 `~/.config/fly-ruler-msfs/fly-ruler-msfs.toml` 与启动命令 `~/.local/bin/fly-ruler-msfs`；`--version vX.Y.Z` 装指定版本，`--source DIR` 改成从本地源码树安装（版本目录名带 `local-` 前缀，加 `--no-build` 就只用已打包产物），`--dry-run` 先看它要做什么，卸载加 `--uninstall`（`--purge` 连配置、日志与会话数据一起删），`--with-service` 额外写一份 systemd user unit（只写文件，不 enable、不 start）。桥不是常驻服务：先启动 MSFS 2024 并进入 Free Flight，再运行 `fly-ruler-msfs`，收工按 Ctrl-C。目录布局、全部选项与 Windows 手工路线见 `docs/guide/01-install.md`。
 
 在源码仓库里开发时，用本目录的 justfile 同步依赖并本地安装扩展模块：
 

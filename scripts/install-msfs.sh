@@ -13,6 +13,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/WindLX/fly_ruler_proto/main/scripts/install-msfs.sh | bash
 #   ./install-msfs.sh --version v0.4.0 --with-service
+#   ./install-msfs.sh --source ~/src/fly_ruler_proto --no-build
 #   ./install-msfs.sh --uninstall [--purge]
 #
 set -euo pipefail
@@ -37,6 +38,10 @@ UNIT_DIR="$XDG_CONFIG_HOME/systemd/user"
 UNIT_FILE="$UNIT_DIR/fly-ruler-msfs.service"
 
 VERSION=""
+SOURCE_DIR=""
+SOURCE_ROOT=""
+SOURCE_BUNDLE=""
+NO_BUILD=false
 APPID="$DEFAULT_APPID"
 WITH_SERVICE=false
 DO_UNINSTALL=false
@@ -53,13 +58,19 @@ usage() {
 
 安装（默认）：把 GitHub Release 里的 MSFS 桥接装到用户空间。
   --version vX.Y.Z   安装指定版本（默认取最新 Release）
+  --source <目录>    从本地 fly_ruler_proto 源码目录安装（不联网）：
+                     使用 <目录>/dist/fly-ruler-msfs，缺失时执行 just msfs package
+  --no-build         配合 --source：不执行构建，产物缺失就直接报错
   --prefix <目录>    程序安装目录（默认 ~/.local/share/fly-ruler-msfs）
   --appid <id>       MSFS 的 Steam AppID（默认 2537590）
   --with-service     额外写一个 systemd user unit（不 enable、不启动）
   --skip-checks      跳过环境检查（protontricks / MSFS / 端口占用等）
   --strict           把警告当作错误
-  --dry-run          只解析版本并打印将要执行的动作
+  --dry-run          只解析来源并打印将要执行的动作
   --yes              跳过确认提示（非交互，管道执行时自动生效）
+
+--source 与 --version 不能同时使用；源码安装不下载 zip，直接校验源码树里的
+dist/fly-ruler-msfs，版本标签写成 local-<仓库版本>。
 
 卸载：
   --uninstall        卸载程序、命令与 unit；配置、日志与会话数据保留
@@ -90,6 +101,16 @@ parse_args() {
       [ $# -ge 2 ] || die "--version 需要一个参数"
       VERSION="$2"
       shift 2
+      ;;
+    --source)
+      [ $# -ge 2 ] || die "--source 需要一个参数"
+      [ -n "$2" ] || die "--source 目录不能为空"
+      SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --no-build)
+      NO_BUILD=true
+      shift
       ;;
     --prefix)
       [ $# -ge 2 ] || die "--prefix 需要一个参数"
@@ -147,11 +168,23 @@ parse_args() {
   if $PURGE && ! $DO_UNINSTALL; then
     die "--purge 只能与 --uninstall 一起用"
   fi
+  if [ -n "$SOURCE_DIR" ] && [ -n "$VERSION" ]; then
+    die "--version 与 --source 不能同时使用"
+  fi
+  if $NO_BUILD && [ -z "$SOURCE_DIR" ]; then
+    die "--no-build 只能与 --source 一起用"
+  fi
 }
 
 require_tools() {
-  local missing=""
-  for tool in curl unzip sha256sum; do
+  local missing="" tool tools
+  # 源码模式不下载、不解压，只需要校验产物用的 sha256sum。
+  if [ -n "$SOURCE_DIR" ]; then
+    tools="sha256sum"
+  else
+    tools="curl unzip sha256sum"
+  fi
+  for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
   done
   if [ -n "$missing" ]; then
@@ -384,6 +417,55 @@ EOF
   fi
 }
 
+# --source 需要 fly_ruler_proto 仓库（打包脚本是它的标志）；成功时设置 SOURCE_ROOT。
+resolve_source_dir() {
+  [ -d "$SOURCE_DIR" ] || die "源码目录不存在：$SOURCE_DIR"
+  local root
+  root="$(cd "$SOURCE_DIR" && pwd -P)"
+  [ -f "$root/scripts/package_msfs_bundle.sh" ] ||
+    die "在 $root 里找不到 scripts/package_msfs_bundle.sh；--source 需要 fly_ruler_proto 仓库目录"
+  SOURCE_ROOT="$root"
+}
+
+# dist/fly-ruler-msfs 是否已经是完整产物（SHA256SUMS + 三个必需文件）。
+bundle_complete() {
+  local root="$1" required
+  [ -f "$root/SHA256SUMS" ] || return 1
+  for required in fly-ruler-msfs-bridge.exe SimConnect.dll web/dist/index.html; do
+    [ -e "$root/$required" ] || return 1
+  done
+  return 0
+}
+
+# 源码模式：优先用已打包好的 dist/fly-ruler-msfs，缺失且允许构建时现场 just msfs package。
+prepare_source_bundle() {
+  local bundle="$SOURCE_ROOT/dist/fly-ruler-msfs"
+  if bundle_complete "$bundle"; then
+    info "使用已打包产物：$bundle"
+  else
+    if $NO_BUILD; then
+      die "没有可用的 $bundle（缺 SHA256SUMS 或必需文件）；先在 $SOURCE_ROOT 执行 just msfs package，或去掉 --no-build"
+    fi
+    command -v just >/dev/null 2>&1 ||
+      die "找不到 just 命令，无法构建 $SOURCE_ROOT；可先手动执行 just msfs package 再配合 --no-build"
+    info "构建 MSFS 产物：just msfs package（目录 $SOURCE_ROOT）"
+    (cd "$SOURCE_ROOT" && just msfs package) || die "构建失败：$SOURCE_ROOT"
+    bundle_complete "$bundle" || die "构建完成后 $bundle 仍不完整"
+  fi
+  SOURCE_BUNDLE="$bundle"
+}
+
+# 源码安装的版本标签：local-<仓库版本>；读不到就用 local。
+source_version_label() {
+  local version
+  version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$SOURCE_ROOT/Cargo.toml" 2>/dev/null | head -n 1)"
+  if [ -n "$version" ]; then
+    printf 'local-%s\n' "$version"
+  else
+    printf 'local\n'
+  fi
+}
+
 fetch_bundle() {
   local tag="$1" tmp_dir="$2"
   local url="https://github.com/${REPO}/releases/download/${tag}/${RELEASE_ASSET}"
@@ -397,11 +479,11 @@ verify_bundle() {
   local unpack="$1"
   local bundle_root
   bundle_root="$(find "$unpack" -maxdepth 2 -type f -name SHA256SUMS -printf '%h\n' | head -n 1)"
-  [ -n "$bundle_root" ] || die "zip 里没有 SHA256SUMS，产物不完整"
+  [ -n "$bundle_root" ] || die "产物里没有 SHA256SUMS，安装包不完整"
   (cd "$bundle_root" && sha256sum -c SHA256SUMS --quiet) || die "SHA256SUMS 校验失败，产物可能损坏"
   local required
   for required in fly-ruler-msfs-bridge.exe SimConnect.dll web/dist/index.html; do
-    [ -e "$bundle_root/$required" ] || die "zip 里缺少 $required"
+    [ -e "$bundle_root/$required" ] || die "产物缺少 $required"
   done
   printf '%s\n' "$bundle_root"
 }
@@ -484,6 +566,9 @@ main() {
   [ "$(id -u)" -ne 0 ] || die "不要用 root 运行：这个脚本只装到当前用户的空间里"
 
   if $DO_UNINSTALL; then
+    if [ -n "$SOURCE_DIR" ]; then
+      info "--uninstall 不需要 --source，已忽略"
+    fi
     if $DRY_RUN; then
       info "dry-run：将卸载 $PREFIX$($PURGE && printf '，并删除配置与会话数据' || printf '，保留配置与会话数据')"
       exit 0
@@ -499,28 +584,54 @@ main() {
     die "--strict：上面有 $WARNINGS 条警告，中止安装"
   fi
 
-  VERSION="$(resolve_version "$VERSION")"
-  info "目标版本：$VERSION"
-  confirm_plan "$VERSION"
+  local bundle_root
+  if [ -n "$SOURCE_DIR" ]; then
+    resolve_source_dir
+    VERSION="$(source_version_label)"
+    info "从本地源码安装：$SOURCE_ROOT"
+    confirm_plan "$VERSION"
 
-  if $DRY_RUN; then
-    note "dry-run：将下载 https://github.com/${REPO}/releases/download/${VERSION}/${RELEASE_ASSET}"
-    note "dry-run：校验 SHA256SUMS 后安装到 $PREFIX/versions/$VERSION"
-    note "dry-run：写命令 $LAUNCHER、配置 $CONFIG_FILE（不存在时）"
-    $WITH_SERVICE && note "dry-run：写 unit $UNIT_FILE（不 enable、不启动）"
-    note "dry-run：以上都未执行"
-    return 0
+    if $DRY_RUN; then
+      if bundle_complete "$SOURCE_ROOT/dist/fly-ruler-msfs"; then
+        note "dry-run：使用已打包产物 $SOURCE_ROOT/dist/fly-ruler-msfs"
+      elif $NO_BUILD; then
+        note "dry-run：缺少 $SOURCE_ROOT/dist/fly-ruler-msfs，--no-build 下会直接报错"
+      else
+        note "dry-run：将执行 just msfs package 生成 $SOURCE_ROOT/dist/fly-ruler-msfs"
+      fi
+      note "dry-run：校验 SHA256SUMS 后安装到 $PREFIX/versions/$VERSION"
+      note "dry-run：写命令 $LAUNCHER、配置 $CONFIG_FILE（不存在时）"
+      $WITH_SERVICE && note "dry-run：写 unit $UNIT_FILE（不 enable、不启动）"
+      note "dry-run：以上都未执行"
+      return 0
+    fi
+
+    prepare_source_bundle
+    bundle_root="$(verify_bundle "$SOURCE_BUNDLE")"
+  else
+    VERSION="$(resolve_version "$VERSION")"
+    info "目标版本：$VERSION"
+    confirm_plan "$VERSION"
+
+    if $DRY_RUN; then
+      note "dry-run：将下载 https://github.com/${REPO}/releases/download/${VERSION}/${RELEASE_ASSET}"
+      note "dry-run：校验 SHA256SUMS 后安装到 $PREFIX/versions/$VERSION"
+      note "dry-run：写命令 $LAUNCHER、配置 $CONFIG_FILE（不存在时）"
+      $WITH_SERVICE && note "dry-run：写 unit $UNIT_FILE（不 enable、不启动）"
+      note "dry-run：以上都未执行"
+      return 0
+    fi
+
+    local tmp_dir
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fly-ruler-msfs.XXXXXX")"
+    # Expand tmp_dir now: the EXIT trap runs after main's locals are gone.
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp_dir'" EXIT
+
+    fetch_bundle "$VERSION" "$tmp_dir"
+    bundle_root="$(verify_bundle "$tmp_dir/unpack")"
   fi
 
-  local tmp_dir
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fly-ruler-msfs.XXXXXX")"
-  # Expand tmp_dir now: the EXIT trap runs after main's locals are gone.
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp_dir'" EXIT
-
-  fetch_bundle "$VERSION" "$tmp_dir"
-  local bundle_root
-  bundle_root="$(verify_bundle "$tmp_dir/unpack")"
   install_bridge "$bundle_root" "$VERSION"
   print_next_steps
 }
